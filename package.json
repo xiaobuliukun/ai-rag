@@ -1,0 +1,22 @@
+{
+  "name": "juejin-flow",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspaces --if-present",
+    "dev:web": "npm run dev -w packages/web",
+    "dev:server": "npm run start:dev -w packages/server",
+    "build": "npm run build --workspaces --if-present",
+    "build:web": "npm run build -w packages/web",
+    "build:server": "npm run build -w packages/server",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "clean": "rm -rf node_modules packages/*/node_modules packages/*/dist packages/web/.next"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

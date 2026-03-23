@@ -1,0 +1,36 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model Book {
+  id        String    @id @default(cuid())
+  title     String
+  path      String    @unique
+  coverImage String?
+  chapters  Chapter[]
+  lastRead  DateTime  @default(now()) @updatedAt
+  createdAt DateTime  @default(now())
+}
+
+model Chapter {
+  id        String   @id @default(cuid())
+  bookId    String
+  title     String
+  fileName  String
+  content   String? // Optional: store parsed content or just rely on file system
+  isRead    Boolean  @default(false)
+  progress  Float    @default(0) // 0 to 100
+  book      Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([bookId, fileName])
+}

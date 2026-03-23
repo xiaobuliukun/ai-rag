@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "references": [
+    { "path": "packages/shared" },
+    { "path": "packages/server" },
+    { "path": "packages/web" }
+  ],
+  "include": [],
+  "exclude": ["node_modules", "packages"]
+}
