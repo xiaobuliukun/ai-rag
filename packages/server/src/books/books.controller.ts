@@ -1,4 +1,11 @@
-import { Controller, Get, Param, Put, Body, ParseFloatPipe } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Param,
+  Put,
+  Body,
+  ParseFloatPipe,
+} from '@nestjs/common';
 import { BooksService } from './books.service';
 
 @Controller('books')
@@ -25,9 +32,10 @@ export class BooksController {
 
   @Put(':bookId/chapters/:chapterId/progress')
   updateProgress(
+    @Param('bookId') bookId: string,
     @Param('chapterId') chapterId: string,
     @Body('progress', ParseFloatPipe) progress: number,
   ) {
-    return this.booksService.updateProgress(chapterId, progress);
+    return this.booksService.updateProgress(bookId, chapterId, progress);
   }
 }

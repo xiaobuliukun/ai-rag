@@ -5,17 +5,40 @@ import { PrismaService } from '../prisma/prisma.service';
 export class BooksService {
   constructor(private prisma: PrismaService) {}
 
+  private withChapterStats<T extends { chapters: Array<{ isRead: boolean }> }>(
+    book: T,
+  ) {
+    return {
+      ...book,
+      totalChapters: book.chapters.length,
+      readChapters: book.chapters.filter((chapter) => chapter.isRead).length,
+    };
+  }
+
   async findAll() {
-    return this.prisma.book.findMany({
+    const books = await this.prisma.book.findMany({
       include: {
-        _count: {
-          select: { chapters: true },
+        chapters: {
+          orderBy: [{ orderIndex: 'asc' }, { fileName: 'asc' }],
+          select: {
+            id: true,
+            bookId: true,
+            title: true,
+            fileName: true,
+            orderIndex: true,
+            isRead: true,
+            progress: true,
+            createdAt: true,
+            updatedAt: true,
+          },
         },
       },
       orderBy: {
         lastRead: 'desc',
       },
     });
+
+    return books.map((book) => this.withChapterStats(book));
   }
 
   async findOne(id: string) {
@@ -23,16 +46,17 @@ export class BooksService {
       where: { id },
       include: {
         chapters: {
-          orderBy: {
-            fileName: 'asc', // Or add an index field for proper ordering
-          },
+          orderBy: [{ orderIndex: 'asc' }, { fileName: 'asc' }],
           select: {
             id: true,
+            bookId: true,
             title: true,
             fileName: true,
+            orderIndex: true,
             isRead: true,
             progress: true,
-            // Exclude content for list view to save bandwidth
+            createdAt: true,
+            updatedAt: true,
           },
         },
       },
@@ -42,7 +66,7 @@ export class BooksService {
       throw new NotFoundException(`Book with ID ${id} not found`);
     }
 
-    return book;
+    return this.withChapterStats(book);
   }
 
   async findChapter(bookId: string, chapterId: string) {
@@ -57,7 +81,21 @@ export class BooksService {
     return chapter;
   }
 
-  async updateProgress(chapterId: string, progress: number) {
+  async updateProgress(bookId: string, chapterId: string, progress: number) {
+    const chapter = await this.prisma.chapter.findFirst({
+      where: {
+        id: chapterId,
+        bookId,
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (!chapter) {
+      throw new NotFoundException(`Chapter not found`);
+    }
+
     return this.prisma.chapter.update({
       where: { id: chapterId },
       data: {

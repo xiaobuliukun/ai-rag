@@ -2,7 +2,13 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import * as fs from 'fs-extra';
 import * as path from 'path';
-import * as matter from 'gray-matter';
+import matter from 'gray-matter';
+import { chunkMarkdownContent } from '../content/chunking';
+
+type MarkdownFile = {
+  absolutePath: string;
+  relativePath: string;
+};
 
 @Injectable()
 export class ScanService {
@@ -19,14 +25,27 @@ export class ScanService {
 
     const entries = await fs.readdir(rootDir, { withFileTypes: true });
 
+    let booksScanned = 0;
+    let chaptersScanned = 0;
+
     for (const entry of entries) {
       if (entry.isDirectory()) {
-        await this.processBook(path.join(rootDir, entry.name), entry.name);
+        const chapterCount = await this.processBook(
+          path.join(rootDir, entry.name),
+          entry.name,
+        );
+        booksScanned += 1;
+        chaptersScanned += chapterCount;
       }
     }
 
     this.logger.log('Scan completed');
-    return { success: true, message: 'Scan completed' };
+    return {
+      success: true,
+      message: `Scan completed: ${booksScanned} books, ${chaptersScanned} chapters`,
+      booksScanned,
+      chaptersScanned,
+    };
   }
 
   private async processBook(bookPath: string, bookTitle: string) {
@@ -42,51 +61,125 @@ export class ScanService {
       },
     });
 
-    const entries = await fs.readdir(bookPath, { withFileTypes: true });
-    
-    // Filter and sort entries (simple sort by name for now)
-    const chapterFiles = entries
-      .filter(e => e.isFile() && e.name.endsWith('.md'))
-      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    const chapterFiles = await this.findMarkdownFiles(bookPath);
 
-    for (const file of chapterFiles) {
-      await this.processChapter(book.id, path.join(bookPath, file.name), file.name);
+    for (const [index, file] of chapterFiles.entries()) {
+      await this.processChapter(book.id, file, index);
     }
+
+    await this.removeMissingChapters(
+      book.id,
+      chapterFiles.map((file) => file.relativePath),
+    );
+
+    return chapterFiles.length;
   }
 
-  private async processChapter(bookId: string, filePath: string, fileName: string) {
+  private async findMarkdownFiles(bookPath: string) {
+    const files = await this.walkMarkdownFiles(bookPath, bookPath);
+    return files.sort((a, b) =>
+      a.relativePath.localeCompare(b.relativePath, undefined, {
+        numeric: true,
+      }),
+    );
+  }
+
+  private async walkMarkdownFiles(
+    bookPath: string,
+    currentPath: string,
+  ): Promise<MarkdownFile[]> {
+    const entries = await fs.readdir(currentPath, { withFileTypes: true });
+    const files: MarkdownFile[] = [];
+
+    for (const entry of entries) {
+      const absolutePath = path.join(currentPath, entry.name);
+
+      if (entry.isDirectory()) {
+        files.push(...(await this.walkMarkdownFiles(bookPath, absolutePath)));
+        continue;
+      }
+
+      if (entry.isFile() && entry.name.toLowerCase().endsWith('.md')) {
+        files.push({
+          absolutePath,
+          relativePath: this.normalizeRelativePath(
+            path.relative(bookPath, absolutePath),
+          ),
+        });
+      }
+    }
+
+    return files;
+  }
+
+  private normalizeRelativePath(filePath: string) {
+    return filePath.split(path.sep).join('/');
+  }
+
+  private async removeMissingChapters(bookId: string, fileNames: string[]) {
+    await this.prisma.chapter.deleteMany({
+      where: {
+        bookId,
+        ...(fileNames.length > 0 ? { fileName: { notIn: fileNames } } : {}),
+      },
+    });
+  }
+
+  private async processChapter(
+    bookId: string,
+    file: MarkdownFile,
+    orderIndex: number,
+  ) {
     // Read file content
-    const fileContent = await fs.readFile(filePath, 'utf-8');
-    
-    // Parse frontmatter
-    // @ts-ignore
+    const fileContent = await fs.readFile(file.absolutePath, 'utf-8');
+
     const { data, content } = matter(fileContent);
 
     // Determine title: Frontmatter title > Filename (without extension)
-    let title = data.title;
+    let title = typeof data.title === 'string' ? data.title : undefined;
     if (!title) {
-      title = path.parse(fileName).name;
+      title = path.parse(file.relativePath).name;
       // Remove number prefix if exists (e.g., "01-Intro" -> "Intro")
       title = title.replace(/^\d+[-_.]\s*/, '');
     }
 
-    await this.prisma.chapter.upsert({
+    const chapter = await this.prisma.chapter.upsert({
       where: {
         bookId_fileName: {
           bookId,
-          fileName,
+          fileName: file.relativePath,
         },
       },
       update: {
         title,
-        content: content, // Storing content in DB for RAG/Search later
+        orderIndex,
+        content, // Storing content in DB for RAG/Search later
       },
       create: {
         bookId,
         title,
-        fileName,
-        content: content,
+        fileName: file.relativePath,
+        orderIndex,
+        content,
       },
     });
+
+    const chunks = chunkMarkdownContent(content);
+    await this.prisma.chapterChunk.deleteMany({
+      where: {
+        chapterId: chapter.id,
+      },
+    });
+
+    if (chunks.length > 0) {
+      await this.prisma.chapterChunk.createMany({
+        data: chunks.map((chunk) => ({
+          chapterId: chapter.id,
+          chunkIndex: chunk.chunkIndex,
+          content: chunk.content,
+          charCount: chunk.charCount,
+        })),
+      });
+    }
   }
 }

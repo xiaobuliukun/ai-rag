@@ -3,13 +3,16 @@ import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  
+
   // Enable CORS
   app.enableCors();
-  
+
   // Set global prefix
   app.setGlobalPrefix('api');
 
-  await app.listen(process.env.PORT ?? 3001); // Use 3001 to avoid conflict with Next.js 3000
+  const port = process.env.PORT ?? 3001;
+  const host = process.env.HOST ?? '127.0.0.1';
+
+  await app.listen(port, host); // Use 3001 to avoid conflict with Next.js 3000
 }
-bootstrap();
+void bootstrap();

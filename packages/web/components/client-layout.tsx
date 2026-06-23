@@ -2,12 +2,15 @@
 
 import * as React from "react"
 import { AppSidebar } from "@/components/app-sidebar"
+import { AIAssistantPanel } from "@/components/ai-assistant-panel"
 import { useStore } from "@/store/useStore"
 import { cn } from "@/lib/utils"
 import { Menu, PanelRightClose, PanelRightOpen } from "lucide-react"
+import { useI18n } from "@/lib/i18n"
 
 export function ClientLayout({ children }: { children: React.ReactNode }) {
   const { isSidebarOpen, toggleSidebar, isAIPanelOpen, toggleAIPanel } = useStore()
+  const { t } = useI18n()
 
   return (
     <div className="min-h-screen bg-background flex">
@@ -19,7 +22,7 @@ export function ClientLayout({ children }: { children: React.ReactNode }) {
         className={cn(
           "flex-1 flex flex-col transition-all duration-300 ease-in-out",
           isSidebarOpen ? "ml-64" : "ml-0",
-          isAIPanelOpen ? "mr-80" : "mr-0" // Reserved for AI Panel
+          isAIPanelOpen ? "mr-96" : "mr-0"
         )}
       >
         {/* Header / Toolbar (optional, usually per page, but global toggle is useful) */}
@@ -39,7 +42,7 @@ export function ClientLayout({ children }: { children: React.ReactNode }) {
               onClick={toggleAIPanel}
               className="p-2 hover:bg-accent/10 rounded-md text-muted-foreground flex items-center gap-2"
             >
-              <span className="text-sm font-medium hidden sm:inline">AI Assistant</span>
+              <span className="text-sm font-medium hidden sm:inline">{t("nav.aiAssistant")}</span>
               {isAIPanelOpen ? <PanelRightClose className="w-5 h-5" /> : <PanelRightOpen className="w-5 h-5" />}
             </button>
           </div>
@@ -50,18 +53,7 @@ export function ClientLayout({ children }: { children: React.ReactNode }) {
         </main>
       </div>
 
-      {/* AI Panel (Placeholder) */}
-      <aside 
-        className={cn(
-          "w-80 border-l bg-card h-screen fixed right-0 top-0 flex flex-col z-40 transition-transform duration-300",
-          isAIPanelOpen ? "translate-x-0" : "translate-x-full"
-        )}
-      >
-        <div className="p-4 border-b font-bold text-lg">AI Assistant</div>
-        <div className="p-4 text-muted-foreground text-sm">
-          Select text to ask AI...
-        </div>
-      </aside>
+      <AIAssistantPanel />
     </div>
   )
 }

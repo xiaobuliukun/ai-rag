@@ -25,12 +25,30 @@ model Chapter {
   title     String
   fileName  String
   content   String? // Optional: store parsed content or just rely on file system
+  orderIndex Int     @default(0)
   isRead    Boolean  @default(false)
   progress  Float    @default(0) // 0 to 100
   book      Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  chunks    ChapterChunk[]
   
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([bookId, fileName])
+  @@index([bookId, orderIndex])
+}
+
+model ChapterChunk {
+  id        String   @id @default(cuid())
+  chapterId String
+  chunkIndex Int
+  content   String
+  charCount Int
+  chapter   Chapter  @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([chapterId, chunkIndex])
+  @@index([chapterId])
 }
