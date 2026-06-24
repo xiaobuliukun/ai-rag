@@ -43,11 +43,14 @@ export interface UpdateProgressRequest {
   progress: number;
 }
 
+export type SearchResultType = 'all' | 'book' | 'chapter' | 'content';
+
 export interface SearchResult {
   id: string;
   type: 'book' | 'chapter' | 'content';
   title: string;
   content: string;
+  highlightedContent?: string;
   score: number;
   bookId: string;
   chapterId?: string;

@@ -10,12 +10,16 @@ describe('AiService', () => {
       findMany: jest.fn(),
     },
   };
+  const contentIndex = {
+    search: jest.fn(),
+  };
 
   let service: AiService;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    service = new AiService(prisma as never);
+    contentIndex.search.mockResolvedValue([]);
+    service = new AiService(prisma as never, contentIndex as never);
   });
 
   it('rejects an empty message', async () => {
@@ -86,6 +90,48 @@ describe('AiService', () => {
     expect(response.sources).toHaveLength(1);
     expect(response.answer).toContain('React hooks');
     expect(response.sources[0]).toMatchObject({
+      bookId: 'book-1',
+      chapterId: 'chapter-1',
+      bookTitle: 'React Patterns',
+      chapterTitle: 'Hooks',
+    });
+  });
+
+  it('uses indexed content search when available', async () => {
+    prisma.chapterChunk.findMany.mockResolvedValue([]);
+    prisma.chapter.findMany.mockResolvedValue([]);
+    contentIndex.search.mockResolvedValue([
+      {
+        chunkId: 'chunk-1',
+        bookId: 'book-1',
+        chapterId: 'chapter-1',
+        bookTitle: 'React Patterns',
+        chapterTitle: 'Hooks',
+        content: 'React hooks let components share stateful logic.',
+        excerpt: 'React hooks let components share stateful logic.',
+        highlightedExcerpt:
+          '<mark>React</mark> hooks let components share stateful logic.',
+        score: 30,
+      },
+    ]);
+
+    const response = await service.chat({
+      message: 'React hooks',
+      context: { bookId: 'book-1' },
+      config: { mode: 'local' },
+    });
+
+    expect(contentIndex.search).toHaveBeenCalledWith(
+      expect.stringContaining('React hooks'),
+      expect.objectContaining({
+        bookId: 'book-1',
+        limit: 250,
+        mode: 'or',
+      }),
+    );
+    expect(prisma.chapterChunk.findMany).not.toHaveBeenCalled();
+    expect(response.sources[0]).toMatchObject({
+      id: 'chunk-1',
       bookId: 'book-1',
       chapterId: 'chapter-1',
       bookTitle: 'React Patterns',

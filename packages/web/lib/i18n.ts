@@ -50,6 +50,10 @@ export const dictionaries = {
       noMatches: "没有找到匹配结果。",
       noQuery: "还没有输入关键词。",
       inBook: "来自 {book}",
+      all: "全部",
+      books: "书籍",
+      chapters: "章节",
+      content: "正文",
     },
     settings: {
       title: "设置",
@@ -137,6 +141,10 @@ export const dictionaries = {
       noMatches: "No matches found.",
       noQuery: "No query yet.",
       inBook: "in {book}",
+      all: "All",
+      books: "Books",
+      chapters: "Chapters",
+      content: "Content",
     },
     settings: {
       title: "Settings",

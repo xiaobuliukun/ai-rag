@@ -135,6 +135,13 @@ body {
   font-feature-settings: "rlig" 1, "calt" 1;
 }
 
+mark {
+  border-radius: 0.2rem;
+  background-color: hsl(var(--accent) / 0.22);
+  color: inherit;
+  padding: 0 0.15rem;
+}
+
 @layer base {
   * {
     @apply border-border;

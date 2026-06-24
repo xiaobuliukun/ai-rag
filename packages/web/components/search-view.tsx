@@ -10,7 +10,7 @@ import {
   Search,
   TextSearch,
 } from "lucide-react";
-import { SearchResult } from "@/types";
+import { SearchResult, SearchResultType } from "@/types";
 import { searchLibrary } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
@@ -25,9 +25,20 @@ const resultIcons = {
   content: TextSearch,
 };
 
+const searchTypes: Array<{
+  value: SearchResultType;
+  labelKey: "search.all" | "search.books" | "search.chapters" | "search.content";
+}> = [
+  { value: "all", labelKey: "search.all" },
+  { value: "book", labelKey: "search.books" },
+  { value: "chapter", labelKey: "search.chapters" },
+  { value: "content", labelKey: "search.content" },
+];
+
 export function SearchView({ initialQuery = "" }: SearchViewProps) {
   const { t } = useI18n();
   const [query, setQuery] = React.useState(initialQuery);
+  const [type, setType] = React.useState<SearchResultType>("all");
   const [results, setResults] = React.useState<SearchResult[]>([]);
   const [isLoading, setIsLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -48,7 +59,7 @@ export function SearchView({ initialQuery = "" }: SearchViewProps) {
       setError(null);
 
       try {
-        const data = await searchLibrary(keyword);
+        const data = await searchLibrary(keyword, undefined, type);
         if (!controller.signal.aborted) {
           setResults(data);
         }
@@ -68,7 +79,7 @@ export function SearchView({ initialQuery = "" }: SearchViewProps) {
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [query, t]);
+  }, [query, t, type]);
 
   return (
     <div className="mx-auto max-w-5xl space-y-8">
@@ -87,6 +98,24 @@ export function SearchView({ initialQuery = "" }: SearchViewProps) {
             placeholder={t("search.placeholder")}
             className="h-12 w-full rounded-md border bg-card pl-12 pr-4 text-base shadow-sm transition-all focus:outline-none focus:ring-2 focus:ring-primary/50"
           />
+        </div>
+
+        <div className="flex w-fit flex-wrap gap-1 rounded-md border bg-card p-1 shadow-sm">
+          {searchTypes.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => setType(option.value)}
+              className={cn(
+                "h-8 rounded-sm px-3 text-sm font-medium transition-colors",
+                type === option.value
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+              )}
+            >
+              {t(option.labelKey)}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -108,6 +137,8 @@ export function SearchView({ initialQuery = "" }: SearchViewProps) {
             const href = result.chapterId
               ? `/book/${result.bookId}/${result.chapterId}`
               : `/book/${result.bookId}`;
+            const hasHighlightedContent =
+              result.type === "content" && Boolean(result.highlightedContent);
 
             return (
               <Link
@@ -136,7 +167,15 @@ export function SearchView({ initialQuery = "" }: SearchViewProps) {
                         result.type === "content" && "font-mono text-xs",
                       )}
                     >
-                      {result.content}
+                      {hasHighlightedContent ? (
+                        <span
+                          dangerouslySetInnerHTML={{
+                            __html: result.highlightedContent ?? "",
+                          }}
+                        />
+                      ) : (
+                        result.content
+                      )}
                     </p>
                   </div>
                 </div>

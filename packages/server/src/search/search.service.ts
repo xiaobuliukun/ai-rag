@@ -1,84 +1,64 @@
 import { Injectable } from '@nestjs/common';
-import { SearchResult } from '@juejin-flow/shared';
+import { SearchResult, SearchResultType } from '@juejin-flow/shared';
+import {
+  ContentIndexService,
+  ContentSearchResult,
+} from '../content/content-index.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 const MAX_RESULTS = 50;
+const SEARCH_TYPES: SearchResultType[] = ['all', 'book', 'chapter', 'content'];
+
+type BookSearchRecord = {
+  id: string;
+  title: string;
+  chapters: Array<{
+    id: string;
+    isRead: boolean;
+  }>;
+};
+
+type ChapterSearchRecord = {
+  id: string;
+  bookId: string;
+  title: string;
+  fileName: string;
+  book: {
+    title: string;
+  };
+};
 
 @Injectable()
 export class SearchService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private contentIndex: ContentIndexService,
+  ) {}
 
-  async search(query: string, bookId?: string): Promise<SearchResult[]> {
+  async search(
+    query: string,
+    bookId?: string,
+    type: SearchResultType = 'all',
+  ): Promise<SearchResult[]> {
     const keyword = query.trim();
     if (!keyword) {
       return [];
     }
 
+    const resultType = SEARCH_TYPES.includes(type) ? type : 'all';
+
+    const bookSearch = this.searchBooks(keyword, bookId, resultType);
+    const chapterSearch = this.searchChapters(keyword, bookId, resultType);
+    const contentSearch = this.searchContent(keyword, bookId, resultType);
     const [books, chapters, chunks] = await Promise.all([
-      this.prisma.book.findMany({
-        where: {
-          ...(bookId ? { id: bookId } : {}),
-          title: { contains: keyword },
-        },
-        include: {
-          chapters: {
-            select: { id: true, isRead: true },
-            orderBy: { fileName: 'asc' },
-          },
-        },
-        take: MAX_RESULTS,
-      }),
-      this.prisma.chapter.findMany({
-        where: {
-          ...(bookId ? { bookId } : {}),
-          title: { contains: keyword },
-        },
-        select: {
-          id: true,
-          bookId: true,
-          title: true,
-          fileName: true,
-          book: {
-            select: {
-              title: true,
-            },
-          },
-        },
-        orderBy: [{ orderIndex: 'asc' }, { fileName: 'asc' }],
-        take: MAX_RESULTS,
-      }),
-      this.prisma.chapterChunk.findMany({
-        where: {
-          content: { contains: keyword },
-          chapter: {
-            ...(bookId ? { bookId } : {}),
-          },
-        },
-        select: {
-          id: true,
-          content: true,
-          chunkIndex: true,
-          chapter: {
-            select: {
-              id: true,
-              bookId: true,
-              title: true,
-              book: {
-                select: {
-                  title: true,
-                },
-              },
-            },
-          },
-        },
-        orderBy: [{ chapterId: 'asc' }, { chunkIndex: 'asc' }],
-        take: MAX_RESULTS,
-      }),
+      bookSearch,
+      chapterSearch,
+      contentSearch,
     ]);
 
     const bookResults: SearchResult[] = books.map((book) => ({
       id: book.id,
-      type: 'book',
+      type: 'book' as const,
       title: book.title,
       content: `${book.chapters.filter((chapter) => chapter.isRead).length}/${book.chapters.length} chapters read`,
       score: this.scoreText(book.title, keyword) + 20,
@@ -91,7 +71,7 @@ export class SearchService {
 
       return {
         id: chapter.id,
-        type: 'chapter',
+        type: 'chapter' as const,
         title: chapter.title,
         content: chapter.fileName,
         score: titleScore + 10,
@@ -102,14 +82,15 @@ export class SearchService {
     });
 
     const contentResults: SearchResult[] = chunks.map((chunk) => ({
-      id: chunk.id,
-      type: 'content',
-      title: chunk.chapter.title,
-      content: this.createSnippet(chunk.content, keyword),
-      score: this.scoreText(chunk.content, keyword),
-      bookId: chunk.chapter.bookId,
-      chapterId: chunk.chapter.id,
-      bookTitle: chunk.chapter.book.title,
+      id: chunk.chunkId,
+      type: 'content' as const,
+      title: chunk.chapterTitle,
+      content: chunk.excerpt,
+      highlightedContent: chunk.highlightedExcerpt,
+      score: chunk.score,
+      bookId: chunk.bookId,
+      chapterId: chunk.chapterId,
+      bookTitle: chunk.bookTitle,
     }));
 
     return [...bookResults, ...chapterResults, ...contentResults]
@@ -133,22 +114,72 @@ export class SearchService {
     return 0;
   }
 
-  private createSnippet(content: string, keyword: string) {
-    const normalized = content.replace(/\s+/g, ' ').trim();
-    if (!normalized) {
-      return 'No saved content';
+  private searchBooks(
+    keyword: string,
+    bookId: string | undefined,
+    resultType: SearchResultType,
+  ): Promise<BookSearchRecord[]> {
+    if (resultType !== 'all' && resultType !== 'book') {
+      return Promise.resolve([]);
     }
 
-    const index = normalized.toLowerCase().indexOf(keyword.toLowerCase());
-    if (index < 0) {
-      return normalized.slice(0, 160);
+    return this.prisma.book.findMany({
+      where: {
+        ...(bookId ? { id: bookId } : {}),
+        title: { contains: keyword },
+      },
+      include: {
+        chapters: {
+          select: { id: true, isRead: true },
+          orderBy: { fileName: 'asc' },
+        },
+      },
+      take: MAX_RESULTS,
+    });
+  }
+
+  private searchChapters(
+    keyword: string,
+    bookId: string | undefined,
+    resultType: SearchResultType,
+  ): Promise<ChapterSearchRecord[]> {
+    if (resultType !== 'all' && resultType !== 'chapter') {
+      return Promise.resolve([]);
     }
 
-    const start = Math.max(0, index - 70);
-    const end = Math.min(normalized.length, index + keyword.length + 90);
-    const prefix = start > 0 ? '...' : '';
-    const suffix = end < normalized.length ? '...' : '';
+    return this.prisma.chapter.findMany({
+      where: {
+        ...(bookId ? { bookId } : {}),
+        title: { contains: keyword },
+      },
+      select: {
+        id: true,
+        bookId: true,
+        title: true,
+        fileName: true,
+        book: {
+          select: {
+            title: true,
+          },
+        },
+      },
+      orderBy: [{ orderIndex: 'asc' }, { fileName: 'asc' }],
+      take: MAX_RESULTS,
+    });
+  }
 
-    return `${prefix}${normalized.slice(start, end)}${suffix}`;
+  private searchContent(
+    keyword: string,
+    bookId: string | undefined,
+    resultType: SearchResultType,
+  ): Promise<ContentSearchResult[]> {
+    if (resultType !== 'all' && resultType !== 'content') {
+      return Promise.resolve([]);
+    }
+
+    return this.contentIndex.search(keyword, {
+      bookId,
+      limit: MAX_RESULTS,
+    });
   }
 }

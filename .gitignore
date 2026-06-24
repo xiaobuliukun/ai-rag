@@ -41,6 +41,7 @@ coverage
 
 # prisma
 packages/server/generated/prisma
+packages/server/dev.db
 
 # next.js
 next-env.d.ts

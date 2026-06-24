@@ -1,4 +1,5 @@
 import { Controller, Get, Query } from '@nestjs/common';
+import type { SearchResultType } from '@juejin-flow/shared';
 import { SearchService } from './search.service';
 
 @Controller('search')
@@ -6,7 +7,11 @@ export class SearchController {
   constructor(private readonly searchService: SearchService) {}
 
   @Get()
-  search(@Query('q') query = '', @Query('bookId') bookId?: string) {
-    return this.searchService.search(query, bookId);
+  search(
+    @Query('q') query = '',
+    @Query('bookId') bookId?: string,
+    @Query('type') type?: SearchResultType,
+  ) {
+    return this.searchService.search(query, bookId, type);
   }
 }

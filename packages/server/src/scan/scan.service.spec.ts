@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ScanService } from './scan.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { ContentIndexService } from '../content/content-index.service';
 import * as fs from 'fs-extra';
 import * as os from 'os';
 import * as path from 'path';
@@ -21,6 +22,9 @@ describe('ScanService', () => {
       createMany: jest.fn(),
     },
   };
+  const contentIndex = {
+    syncBook: jest.fn(),
+  };
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -32,6 +36,10 @@ describe('ScanService', () => {
         {
           provide: PrismaService,
           useValue: prisma,
+        },
+        {
+          provide: ContentIndexService,
+          useValue: contentIndex,
         },
       ],
     }).compile();
@@ -112,6 +120,7 @@ describe('ScanService', () => {
       },
     });
     expect(prisma.chapterChunk.createMany).toHaveBeenCalledTimes(2);
+    expect(contentIndex.syncBook).toHaveBeenCalledWith('book-1');
   });
 
   it('removes all chapters when a scanned book has no markdown files', async () => {
@@ -129,5 +138,6 @@ describe('ScanService', () => {
       },
     });
     expect(prisma.chapter.upsert).not.toHaveBeenCalled();
+    expect(contentIndex.syncBook).toHaveBeenCalledWith('book-1');
   });
 });

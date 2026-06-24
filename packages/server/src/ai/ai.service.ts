@@ -9,8 +9,9 @@ import {
   AiRuntimeConfig,
   AiSource,
 } from '@juejin-flow/shared';
-import { PrismaService } from '../prisma/prisma.service';
 import { chunkMarkdownContent } from '../content/chunking';
+import { ContentIndexService } from '../content/content-index.service';
+import { PrismaService } from '../prisma/prisma.service';
 
 const MAX_SOURCE_COUNT = 5;
 const MAX_CHAPTERS = 250;
@@ -48,7 +49,10 @@ type ChatCompletionResponse = {
 
 @Injectable()
 export class AiService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private contentIndex: ContentIndexService,
+  ) {}
 
   async chat(request: AiChatRequest): Promise<AiChatResponse> {
     const message = request.message?.trim();
@@ -104,15 +108,7 @@ export class AiService {
       context?.selectedText?.slice(0, MAX_SELECTED_TEXT) ?? '';
     const terms = this.buildTerms(`${request.message} ${selectedText}`);
 
-    const chunkWhereTerms = terms.length
-      ? {
-          OR: terms.map((term) => ({
-            content: { contains: term },
-          })),
-        }
-      : {};
-
-    const [currentChunks, matchingChunks] = await Promise.all([
+    const [currentChunks, indexedMatches] = await Promise.all([
       context?.chapterId
         ? this.prisma.chapterChunk.findMany({
             where: {
@@ -123,20 +119,19 @@ export class AiService {
             take: 20,
           })
         : Promise.resolve([]),
-      this.prisma.chapterChunk.findMany({
-        where: {
-          ...chunkWhereTerms,
-          chapter: {
-            ...(context?.bookId ? { bookId: context.bookId } : {}),
-          },
-        },
-        select: this.chunkSelect(),
-        orderBy: [{ chapterId: 'asc' }, { chunkIndex: 'asc' }],
-        take: MAX_CHAPTERS,
+      this.contentIndex.search(`${request.message} ${selectedText}`, {
+        bookId: context?.bookId,
+        limit: MAX_CHAPTERS,
+        mode: 'or',
       }),
     ]);
 
-    const indexedChunks = this.dedupeRankedChunks([
+    const matchingChunks =
+      indexedMatches.length > 0
+        ? []
+        : await this.retrieveMatchingChunks(terms, context?.bookId);
+
+    const currentRankedChunks = this.dedupeStoredChunks([
       ...currentChunks,
       ...matchingChunks,
     ]).map((chunk) => ({
@@ -152,6 +147,33 @@ export class AiService {
       ),
     }));
 
+    const indexedRankedChunks = indexedMatches.map((match, index) => {
+      const chapter = {
+        id: match.chapterId,
+        bookId: match.bookId,
+        title: match.chapterTitle,
+        content: null,
+        book: {
+          title: match.bookTitle,
+        },
+      };
+
+      return {
+        id: match.chunkId,
+        chunkIndex: index,
+        chapter,
+        text: match.content,
+        score:
+          match.score +
+          this.scoreChunk(match.content, chapter, terms, context?.chapterId),
+      };
+    });
+
+    const indexedChunks = this.dedupeRankedChunks([
+      ...currentRankedChunks,
+      ...indexedRankedChunks,
+    ]);
+
     const fallbackChunks =
       indexedChunks.length > 0
         ? []
@@ -163,6 +185,28 @@ export class AiService {
       .slice(0, MAX_SOURCE_COUNT);
 
     return ranked.map((chunk, index) => this.toSource(chunk, index));
+  }
+
+  private async retrieveMatchingChunks(terms: string[], bookId?: string) {
+    const chunkWhereTerms = terms.length
+      ? {
+          OR: terms.map((term) => ({
+            content: { contains: term },
+          })),
+        }
+      : {};
+
+    return this.prisma.chapterChunk.findMany({
+      where: {
+        ...chunkWhereTerms,
+        chapter: {
+          ...(bookId ? { bookId } : {}),
+        },
+      },
+      select: this.chunkSelect(),
+      orderBy: [{ chapterId: 'asc' }, { chunkIndex: 'asc' }],
+      take: MAX_CHAPTERS,
+    });
   }
 
   private chunkSelect() {
@@ -182,7 +226,7 @@ export class AiService {
     } as const;
   }
 
-  private dedupeRankedChunks<
+  private dedupeStoredChunks<
     T extends {
       id: string;
       content: string;
@@ -190,6 +234,17 @@ export class AiService {
       chapter: ChapterRecord;
     },
   >(chunks: T[]) {
+    const seen = new Set<string>();
+    return chunks.filter((chunk) => {
+      if (seen.has(chunk.id)) {
+        return false;
+      }
+      seen.add(chunk.id);
+      return true;
+    });
+  }
+
+  private dedupeRankedChunks(chunks: RankedChunk[]) {
     const seen = new Set<string>();
     return chunks.filter((chunk) => {
       if (seen.has(chunk.id)) {

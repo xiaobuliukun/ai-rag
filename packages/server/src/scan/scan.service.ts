@@ -4,6 +4,7 @@ import * as fs from 'fs-extra';
 import * as path from 'path';
 import matter from 'gray-matter';
 import { chunkMarkdownContent } from '../content/chunking';
+import { ContentIndexService } from '../content/content-index.service';
 
 type MarkdownFile = {
   absolutePath: string;
@@ -14,7 +15,10 @@ type MarkdownFile = {
 export class ScanService {
   private readonly logger = new Logger(ScanService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private contentIndex: ContentIndexService,
+  ) {}
 
   async scanDirectory(rootDir: string) {
     this.logger.log(`Scanning directory: ${rootDir}`);
@@ -71,6 +75,7 @@ export class ScanService {
       book.id,
       chapterFiles.map((file) => file.relativePath),
     );
+    await this.contentIndex.syncBook(book.id);
 
     return chapterFiles.length;
   }

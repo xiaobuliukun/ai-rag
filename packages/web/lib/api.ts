@@ -5,6 +5,7 @@ import {
   Chapter,
   ScanResponse,
   SearchResult,
+  SearchResultType,
 } from "@/types";
 
 export const API_BASE_URL =
@@ -88,10 +89,17 @@ export function scanDirectory(path: string) {
   });
 }
 
-export function searchLibrary(query: string, bookId?: string) {
+export function searchLibrary(
+  query: string,
+  bookId?: string,
+  type: SearchResultType = "all",
+) {
   const params = new URLSearchParams({ q: query });
   if (bookId) {
     params.set("bookId", bookId);
+  }
+  if (type !== "all") {
+    params.set("type", type);
   }
 
   return fetchJson<SearchResult[]>(`/search?${params.toString()}`, {

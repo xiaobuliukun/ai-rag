@@ -9,6 +9,7 @@ export type {
   ScanRequest,
   ScanResponse,
   SearchResult,
+  SearchResultType,
   SidebarConfig,
   UpdateProgressRequest,
 } from "@juejin-flow/shared";
