@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { Book as BookIcon, Clock } from "lucide-react";
 import { Book } from "@/types";
@@ -25,10 +26,13 @@ export function BookCard({ book }: BookCardProps) {
         {/* Cover Image Placeholder */}
         <div className="aspect-[3/4] bg-muted flex items-center justify-center relative group-hover:bg-muted/80 transition-colors">
           {book.coverImage ? (
-            <img
+            <Image
               src={book.coverImage}
               alt={book.title}
-              className="object-cover w-full h-full"
+              fill
+              sizes="(max-width: 768px) 50vw, (max-width: 1200px) 25vw, 220px"
+              className="object-cover"
+              unoptimized
             />
           ) : (
             <BookIcon className="w-16 h-16 text-muted-foreground opacity-20" />
