@@ -18,6 +18,18 @@ interface AppState {
   lineHeight: number
   setLineHeight: (lineHeight: number) => void
 
+  colorTemperature: number
+  setColorTemperature: (value: number) => void
+
+  pageBrightness: number
+  setPageBrightness: (value: number) => void
+
+  paperTexture: boolean
+  setPaperTexture: (enabled: boolean) => void
+
+  readingReminderMinutes: number
+  setReadingReminderMinutes: (minutes: number) => void
+
   locale: Locale
   setLocale: (locale: Locale) => void
 
@@ -47,6 +59,19 @@ export const useStore = create<AppState>()(
       lineHeight: 1.8,
       setLineHeight: (lineHeight) => set({ lineHeight }),
 
+      colorTemperature: 52,
+      setColorTemperature: (value) => set({ colorTemperature: value }),
+
+      pageBrightness: 100,
+      setPageBrightness: (value) => set({ pageBrightness: value }),
+
+      paperTexture: true,
+      setPaperTexture: (enabled) => set({ paperTexture: enabled }),
+
+      readingReminderMinutes: 30,
+      setReadingReminderMinutes: (minutes) =>
+        set({ readingReminderMinutes: minutes }),
+
       locale: "zh-CN",
       setLocale: (locale) => set({ locale }),
 
@@ -73,6 +98,10 @@ export const useStore = create<AppState>()(
         isSidebarOpen: state.isSidebarOpen,
         fontSize: state.fontSize,
         lineHeight: state.lineHeight,
+        colorTemperature: state.colorTemperature,
+        pageBrightness: state.pageBrightness,
+        paperTexture: state.paperTexture,
+        readingReminderMinutes: state.readingReminderMinutes,
         locale: state.locale,
         aiConfig: state.aiConfig,
       }),

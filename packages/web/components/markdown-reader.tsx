@@ -31,6 +31,9 @@ export function MarkdownReader({
       >
         <ReactMarkdown
           components={{
+            pre({ children }) {
+              return <>{children}</>;
+            },
             code({
               inline,
               className,
@@ -95,7 +98,12 @@ function CodeBlock({
   ...props
 }: ComponentPropsWithoutRef<"code"> & { language: string }) {
   const [copied, setCopied] = React.useState(false);
-  const text = React.Children.toArray(children).join("");
+  const text = React.Children.toArray(children).join("").replace(/\n$/, "");
+  const highlighted = React.useMemo(
+    () => highlightCode(text, language),
+    [language, text],
+  );
+  const lineCount = Math.max(1, text.split("\n").length);
 
   const copyCode = async () => {
     await navigator.clipboard.writeText(text);
@@ -116,13 +124,184 @@ function CodeBlock({
           {copied ? "Copied" : "Copy"}
         </button>
       </div>
-      <pre className="overflow-x-auto p-4">
-        <code className={className} {...props}>
-          {children}
-        </code>
-      </pre>
+      <div className="grid grid-cols-[auto_minmax(0,1fr)] overflow-hidden">
+        <div
+          aria-hidden="true"
+          className="select-none border-r bg-background/40 px-3 py-4 text-right font-mono text-xs leading-6 text-muted-foreground"
+        >
+          {Array.from({ length: lineCount }, (_, index) => (
+            <div key={index}>{index + 1}</div>
+          ))}
+        </div>
+        <pre className="overflow-x-auto p-4 text-sm leading-6">
+          <code
+            className={cn("block min-w-full font-mono", className)}
+            dangerouslySetInnerHTML={{ __html: highlighted }}
+            {...props}
+          />
+        </pre>
+      </div>
     </div>
   );
+}
+
+type TokenPattern = {
+  className: string;
+  regex: RegExp;
+};
+
+const commonKeywords = [
+  'abstract',
+  'async',
+  'await',
+  'break',
+  'case',
+  'catch',
+  'class',
+  'const',
+  'constructor',
+  'continue',
+  'default',
+  'delete',
+  'do',
+  'else',
+  'enum',
+  'export',
+  'extends',
+  'false',
+  'finally',
+  'for',
+  'from',
+  'function',
+  'if',
+  'implements',
+  'import',
+  'in',
+  'instanceof',
+  'interface',
+  'let',
+  'new',
+  'null',
+  'of',
+  'private',
+  'protected',
+  'public',
+  'return',
+  'static',
+  'super',
+  'switch',
+  'this',
+  'throw',
+  'true',
+  'try',
+  'type',
+  'typeof',
+  'undefined',
+  'while',
+  'yield',
+].join('|');
+
+function highlightCode(code: string, language: string) {
+  const normalizedLanguage = language.toLowerCase();
+
+  if (['json', 'jsonc'].includes(normalizedLanguage)) {
+    return tokenize(code, [
+      { className: 'syntax-property', regex: /"(?:\\.|[^"\\])*"(?=\s*:)/g },
+      { className: 'syntax-string', regex: /"(?:\\.|[^"\\])*"/g },
+      { className: 'syntax-number', regex: /-?\b\d+(?:\.\d+)?\b/g },
+      { className: 'syntax-keyword', regex: /\b(?:true|false|null)\b/g },
+      { className: 'syntax-punctuation', regex: /[{}\[\],:]/g },
+    ]);
+  }
+
+  if (['css', 'scss'].includes(normalizedLanguage)) {
+    return tokenize(code, [
+      { className: 'syntax-comment', regex: /\/\*[\s\S]*?\*\//g },
+      { className: 'syntax-property', regex: /[a-z-]+(?=\s*:)/gi },
+      { className: 'syntax-string', regex: /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g },
+      { className: 'syntax-number', regex: /-?\b\d+(?:\.\d+)?(?:px|rem|em|%|vh|vw|s|ms)?\b/g },
+      { className: 'syntax-keyword', regex: /#[0-9a-f]{3,8}\b|var\(--[^)]+\)|\b(?:calc|clamp|min|max|rgb|rgba|hsl|hsla|color-mix)\b/gi },
+      { className: 'syntax-punctuation', regex: /[{}();,:]/g },
+    ]);
+  }
+
+  if (['bash', 'sh', 'shell', 'zsh'].includes(normalizedLanguage)) {
+    return tokenize(code, [
+      { className: 'syntax-comment', regex: /#.*/g },
+      { className: 'syntax-string', regex: /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g },
+      { className: 'syntax-keyword', regex: /\b(?:cd|cp|curl|echo|export|git|mkdir|npm|pnpm|rm|yarn)\b/g },
+      { className: 'syntax-property', regex: /\s--?[a-z0-9-]+/gi },
+    ]);
+  }
+
+  if (['md', 'markdown'].includes(normalizedLanguage)) {
+    return tokenize(code, [
+      { className: 'syntax-keyword', regex: /^#{1,6}\s.+$/gm },
+      { className: 'syntax-string', regex: /`[^`]+`|\*\*[^*]+\*\*/g },
+      { className: 'syntax-property', regex: /\[[^\]]+\]\([^)]+\)/g },
+    ]);
+  }
+
+  return tokenize(code, [
+    { className: 'syntax-comment', regex: /\/\/.*|\/\*[\s\S]*?\*\//g },
+    { className: 'syntax-string', regex: /`(?:\\.|[^`\\])*`|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g },
+    {
+      className: 'syntax-keyword',
+      regex: new RegExp(`\\b(?:${commonKeywords})\\b`, 'g'),
+    },
+    { className: 'syntax-number', regex: /-?\b\d+(?:\.\d+)?\b/g },
+    { className: 'syntax-property', regex: /\b[A-Za-z_$][\w$]*(?=\s*:)/g },
+    { className: 'syntax-punctuation', regex: /[{}\[\]();,.<>]/g },
+  ]);
+}
+
+function tokenize(code: string, patterns: TokenPattern[]) {
+  const matches: Array<{
+    index: number;
+    end: number;
+    className: string;
+    value: string;
+  }> = [];
+
+  for (const pattern of patterns) {
+    pattern.regex.lastIndex = 0;
+    for (const match of code.matchAll(pattern.regex)) {
+      if (match.index === undefined) {
+        continue;
+      }
+      matches.push({
+        index: match.index,
+        end: match.index + match[0].length,
+        className: pattern.className,
+        value: match[0],
+      });
+    }
+  }
+
+  matches.sort((left, right) => left.index - right.index || right.end - left.end);
+
+  let cursor = 0;
+  let html = '';
+  for (const match of matches) {
+    if (match.index < cursor) {
+      continue;
+    }
+    html += escapeHtml(code.slice(cursor, match.index));
+    html += `<span class="${match.className}">${escapeHtml(match.value)}</span>`;
+    cursor = match.end;
+  }
+
+  html += escapeHtml(code.slice(cursor));
+  return html;
+}
+
+function escapeHtml(text: string) {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
 function resolveMarkdownImageSrc(

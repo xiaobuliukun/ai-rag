@@ -2,11 +2,12 @@
 
 ```mermaid
 graph TD
-    A[用户浏览器] --> B[Next.js 14 App Router]
-    B --> C[Prisma ORM]
-    B --> D[本地文件系统]
-    B --> E[向量存储]
-    B --> F[AI服务]
+    A[用户浏览器] --> B[Next.js 16 App Router]
+    B --> N[NestJS API]
+    N --> C[Prisma ORM]
+    N --> D[本地文件系统]
+    N --> E[SQLite FTS + 本地向量表]
+    N --> F[AI服务]
     
     subgraph "前端层"
         B
@@ -16,7 +17,7 @@ graph TD
         C
         G[(SQLite数据库)]
         E
-        H[LanceDB向量库]
+        H[SQLite FTS5 / VectorData]
     end
     
     subgraph "文件存储"
@@ -28,7 +29,7 @@ graph TD
     subgraph "AI服务层"
         F
         K[OpenAI API]
-        L[Ollama本地]
+        L[OpenAI-compatible 接口]
     end
     
     C --> G
@@ -41,23 +42,23 @@ graph TD
 
 ## 2. 技术栈描述
 
-* **前端**: Next.js 14 (App Router) + React 18 + TypeScript
+* **前端**: Next.js 16 (App Router) + React 19 + TypeScript
 
-* **样式**: Tailwind CSS 3 + Shadcn/ui + Lucide React图标
+* **样式**: Tailwind CSS 4 + Lucide React图标
 
-* **初始化工具**: create-next-app
+* **后端**: NestJS 11 + TypeScript
 
 * **数据库**: SQLite + Prisma ORM
 
-* **向量存储**: LanceDB (本地向量数据库)
+* **全文检索**: SQLite FTS5
 
-* **Markdown处理**: gray-matter + react-markdown + next-mdx-remote
+* **语义检索**: 本地 hash embedding + SQLite `VectorData` 表
 
-* **代码高亮**: Shiki
+* **Markdown处理**: gray-matter + react-markdown
 
-* **AI集成**: LangChain + OpenAI SDK + Ollama
+* **代码高亮**: 前端轻量 tokenizer
 
-* **文件处理**: fs-extra
+* **AI集成**: 本地抽取式回答 + OpenAI-compatible `/chat/completions`
 
 * **动画**: framer-motion
 
@@ -66,15 +67,15 @@ graph TD
 | 路由                             | 用途             |
 | ------------------------------ | -------------- |
 | `/`                            | 首页，显示书籍库和阅读统计  |
-| `/reader/[bookId]/[chapterId]` | 阅读器页面，三栏式布局    |
+| `/book/[bookId]/[chapterId]`   | 阅读器页面，三栏式布局    |
 | `/search`                      | 全局搜索页面         |
 | `/management`                  | 书籍管理页面         |
 | `/settings`                    | 设置页面，包含主题和AI配置 |
 | `/api/books`                   | 书籍数据API        |
-| `/api/chapters`                | 章节数据API        |
+| `/api/books/:bookId/chapters/:chapterId` | 章节数据API |
 | `/api/search`                  | 搜索API          |
 | `/api/ai/chat`                 | AI对话API        |
-| `/api/ai/vectorize`            | 文本向量化API       |
+| `/api/books/stats`             | 阅读统计API        |
 
 ## 4. API定义
 
@@ -203,13 +204,13 @@ GET /api/search?q=string&bookId=string
 
 ```mermaid
 graph TD
-    A[客户端请求] --> B[Next.js API路由]
+    A[客户端请求] --> B[NestJS Controller]
     B --> C[服务层]
     C --> D[数据访问层]
     C --> E[文件系统层]
     C --> F[AI服务层]
     
-    subgraph "Next.js服务器"
+    subgraph "NestJS API服务器"
         B
         C[BookService]
         C --> G[ChapterService]
@@ -217,13 +218,13 @@ graph TD
         C --> I[AIChatService]
         D[PrismaClient]
         E[FileSystemService]
-        F[AIIntegrationService]
+        F[AiService]
     end
     
     D --> J[(SQLite)]
     E --> K[本地文件]
-    F --> L[LanceDB]
-    F --> M[OpenAI/Ollama]
+    F --> L[SQLite VectorData]
+    F --> M[OpenAI-compatible API]
 ```
 
 ## 6. 数据模型
@@ -359,10 +360,10 @@ CREATE TABLE readingProgress (
 );
 ```
 
-**向量数据表 (vectorData)**
+**向量数据表 (VectorData)**
 
 ```sql
--- 创建表 (LanceDB会自动处理向量存储)
+-- 当前实现：SQLite 中保存序列化后的本地 embedding
 CREATE TABLE vectorData (
     id TEXT PRIMARY KEY,
     chapterId TEXT NOT NULL,
@@ -378,20 +379,19 @@ CREATE INDEX idx_vectorData_chapterId ON vectorData(chapterId);
 
 ## 7. RAG实现方案
 
-### 7.1 文本向量化流程
+### 7.1 文本索引流程
 
 1. **文件扫描时**：将每个章节内容分割成适当大小的文本块
-2. **向量化处理**：使用选定的AI模型（OpenAI或本地Ollama）生成文本嵌入
-3. **存储到LanceDB**：将向量与原始文本、元数据一起存储
-4. **建立索引**：为向量数据创建高效的相似度搜索索引
+2. **全文索引**：将标题和正文写入 SQLite FTS5 虚拟表
+3. **本地向量化**：使用确定性的 hash embedding 生成轻量向量
+4. **存储向量**：将序列化 embedding 与原始 chunk 写入 `VectorData`
 
 ### 7.2 向量搜索流程
 
 1. **用户查询**：接收用户的问题或选中的文本
-2. **查询向量化**：将查询文本转换为向量
-3. **相似度搜索**：在LanceDB中查找最相关的文本片段
-4. **上下文构建**：将相关片段组合成AI的上下文
-5. **生成回答**：基于上下文生成准确的回答
+2. **混合检索**：优先使用 FTS5，补充本地向量余弦相似度
+3. **上下文构建**：将相关片段组合成 AI 的上下文
+4. **生成回答**：本地模式返回抽取式回答；OpenAI-compatible 模式调用 `/chat/completions`
 
 ### 7.3 图片处理策略
 
@@ -402,4 +402,3 @@ CREATE INDEX idx_vectorData_chapterId ON vectorData(chapterId);
 * **缓存策略**：实现图片缓存，提高加载性能
 
 * **格式支持**：支持常见的图片格式（PNG, JPG, GIF, SVG）
-

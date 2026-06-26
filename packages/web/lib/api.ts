@@ -9,6 +9,7 @@ import {
   Chapter,
   CreateBookmarkRequest,
   ImportBackupResponse,
+  LibraryStats,
   PersistedAiConfig,
   ScanResponse,
   SearchResult,
@@ -72,6 +73,10 @@ export function getBooks() {
 
 export function getBook(bookId: string) {
   return fetchJson<Book>(`/books/${bookId}`, { cache: "no-store" });
+}
+
+export function getLibraryStats() {
+  return fetchJson<LibraryStats>("/books/stats", { cache: "no-store" });
 }
 
 export function getChapter(bookId: string, chapterId: string) {

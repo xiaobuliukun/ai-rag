@@ -3,8 +3,10 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import type { UpdateBookRequest } from '@juejin-flow/shared';
+import type { LibraryStats, UpdateBookRequest } from '@juejin-flow/shared';
 import { PrismaService } from '../prisma/prisma.service';
+
+const AVERAGE_READING_CHARS_PER_MINUTE = 450;
 
 @Injectable()
 export class BooksService {
@@ -45,6 +47,63 @@ export class BooksService {
     });
 
     return books.map((book) => this.withChapterStats(book));
+  }
+
+  async getStats(): Promise<LibraryStats> {
+    const books = await this.prisma.book.findMany({
+      select: {
+        lastRead: true,
+        chapters: {
+          select: {
+            isRead: true,
+            progress: true,
+            content: true,
+            updatedAt: true,
+          },
+        },
+      },
+    });
+
+    const totalBooks = books.length;
+    const chapters = books.flatMap((book) => book.chapters);
+    const totalChapters = chapters.length;
+    const completedChapters = chapters.filter((chapter) => chapter.isRead).length;
+    const inProgressChapters = chapters.filter(
+      (chapter) => !chapter.isRead && chapter.progress > 0,
+    ).length;
+    const learningDays = new Set(
+      chapters
+        .filter((chapter) => chapter.progress > 0 || chapter.isRead)
+        .map((chapter) => toDayKey(chapter.updatedAt)),
+    ).size;
+    const latestReadAt =
+      chapters
+        .filter((chapter) => chapter.progress > 0 || chapter.isRead)
+        .map((chapter) => chapter.updatedAt)
+        .sort((left, right) => right.getTime() - left.getTime())[0] ?? null;
+    const estimatedReadingMinutes = Math.round(
+      chapters.reduce((total, chapter) => {
+        const progressRatio = Math.min(100, Math.max(0, chapter.progress)) / 100;
+        const charCount = chapter.content?.trim().length ?? 0;
+        return (
+          total + (charCount / AVERAGE_READING_CHARS_PER_MINUTE) * progressRatio
+        );
+      }, 0),
+    );
+
+    return {
+      totalBooks,
+      totalChapters,
+      completedChapters,
+      inProgressChapters,
+      estimatedReadingMinutes,
+      learningDays,
+      completionRate:
+        totalChapters > 0
+          ? Math.round((completedChapters / totalChapters) * 1000) / 10
+          : 0,
+      latestReadAt,
+    };
   }
 
   async findOne(id: string) {
@@ -129,6 +188,9 @@ export class BooksService {
   async findChapter(bookId: string, chapterId: string) {
     const chapter = await this.prisma.chapter.findUnique({
       where: { id: chapterId },
+      include: {
+        readingProgress: true,
+      },
     });
 
     if (!chapter || chapter.bookId !== bookId) {
@@ -190,6 +252,10 @@ export class BooksService {
 
     return updatedChapter;
   }
+}
+
+function toDayKey(value: Date) {
+  return value.toISOString().slice(0, 10);
 }
 
 function parseTags(value?: string | null) {

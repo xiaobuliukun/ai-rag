@@ -3,15 +3,19 @@
 import * as React from "react";
 import {
   AlertCircle,
+  BarChart3,
+  BookOpenCheck,
+  CalendarDays,
   FolderSearch,
   Loader2,
   Search,
   RefreshCw,
+  Timer,
 } from "lucide-react";
-import { Book } from "@/types";
+import { Book, LibraryStats } from "@/types";
 import { BookCard } from "@/components/book-card";
 import { cn } from "@/lib/utils";
-import { getBooks, scanDirectory } from "@/lib/api";
+import { getBooks, getLibraryStats, scanDirectory } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
 const LIBRARY_REFRESH_EVENT = "library:refresh";
@@ -19,6 +23,7 @@ const LIBRARY_REFRESH_EVENT = "library:refresh";
 export function LibraryView() {
   const { t } = useI18n();
   const [books, setBooks] = React.useState<Book[]>([]);
+  const [stats, setStats] = React.useState<LibraryStats | null>(null);
   const [query, setQuery] = React.useState("");
   const [scanPath, setScanPath] = React.useState("");
   const [status, setStatus] = React.useState<string | null>(null);
@@ -31,9 +36,15 @@ export function LibraryView() {
     setError(null);
 
     try {
-      setBooks(await getBooks());
+      const [nextBooks, nextStats] = await Promise.all([
+        getBooks(),
+        getLibraryStats().catch(() => null),
+      ]);
+      setBooks(nextBooks);
+      setStats(nextStats);
     } catch (err) {
       setBooks([]);
+      setStats(null);
       setError(err instanceof Error ? err.message : t("library.loadFailed"));
     } finally {
       setIsLoading(false);
@@ -154,6 +165,43 @@ export function LibraryView() {
         </form>
       </div>
 
+      {stats && (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <StatCard
+            icon={BookOpenCheck}
+            label={t("stats.completedChapters")}
+            value={`${stats.completedChapters}/${stats.totalChapters}`}
+            helper={t("stats.completionRate", {
+              percent: stats.completionRate,
+            })}
+          />
+          <StatCard
+            icon={Timer}
+            label={t("stats.readingTime")}
+            value={formatMinutes(stats.estimatedReadingMinutes, t)}
+            helper={t("stats.estimated")}
+          />
+          <StatCard
+            icon={CalendarDays}
+            label={t("stats.learningDays")}
+            value={String(stats.learningDays)}
+            helper={
+              stats.latestReadAt
+                ? t("stats.latestRead", {
+                    date: new Date(stats.latestReadAt).toLocaleDateString(),
+                  })
+                : t("stats.noReadingYet")
+            }
+          />
+          <StatCard
+            icon={BarChart3}
+            label={t("stats.inProgress")}
+            value={String(stats.inProgressChapters)}
+            helper={t("stats.totalBooks", { count: stats.totalBooks })}
+          />
+        </div>
+      )}
+
       {isLoading ? (
         <div className="flex min-h-64 items-center justify-center rounded-lg border bg-card">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -173,4 +221,46 @@ export function LibraryView() {
       )}
     </div>
   );
+}
+
+function StatCard({
+  icon: Icon,
+  label,
+  value,
+  helper,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  value: string;
+  helper: string;
+}) {
+  return (
+    <div className="rounded-lg border bg-card p-4 shadow-sm">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-sm font-medium text-muted-foreground">{label}</div>
+        <div className="flex h-9 w-9 items-center justify-center rounded-md bg-secondary text-primary">
+          <Icon className="h-4 w-4" />
+        </div>
+      </div>
+      <div className="mt-3 text-2xl font-bold tracking-tight text-foreground">
+        {value}
+      </div>
+      <div className="mt-1 text-xs text-muted-foreground">{helper}</div>
+    </div>
+  );
+}
+
+function formatMinutes(
+  minutes: number,
+  t: ReturnType<typeof useI18n>["t"],
+) {
+  if (minutes < 60) {
+    return t("stats.minutes", { minutes });
+  }
+
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest > 0
+    ? t("stats.hoursMinutes", { hours, minutes: rest })
+    : t("stats.hours", { hours });
 }

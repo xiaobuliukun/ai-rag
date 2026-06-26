@@ -142,6 +142,47 @@ mark {
   padding: 0 0.15rem;
 }
 
+.reader-paper {
+  background-image:
+    radial-gradient(
+      circle at 1px 1px,
+      hsl(38 42% 38% / var(--paper-texture-opacity, 0)) 1px,
+      transparent 0
+    ),
+    linear-gradient(
+      hsl(42 100% 88% / calc(var(--reader-warmth, 0.52) * 0.22)),
+      hsl(42 100% 88% / calc(var(--reader-warmth, 0.52) * 0.22))
+    );
+  background-size: 12px 12px, auto;
+  filter: brightness(var(--reader-brightness, 1));
+}
+
+.syntax-keyword {
+  color: hsl(var(--primary));
+  font-weight: 700;
+}
+
+.syntax-string {
+  color: hsl(151 46% 32%);
+}
+
+.syntax-number {
+  color: hsl(16 82% 45%);
+}
+
+.syntax-comment {
+  color: hsl(var(--muted-foreground));
+  font-style: italic;
+}
+
+.syntax-property {
+  color: hsl(205 62% 36%);
+}
+
+.syntax-punctuation {
+  color: hsl(var(--muted-foreground));
+}
+
 @layer base {
   * {
     @apply border-border;

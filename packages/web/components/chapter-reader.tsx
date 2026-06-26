@@ -3,6 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import {
+  Bell,
   Check,
   CheckCircle2,
   ChevronLeft,
@@ -11,6 +12,7 @@ import {
   Trash2,
   Loader2,
   Save,
+  X,
 } from "lucide-react";
 import { Book, Bookmark, Chapter } from "@/types";
 import {
@@ -50,11 +52,29 @@ export function ChapterReader({
   const [bookmarks, setBookmarks] = React.useState<Bookmark[]>([]);
   const [bookmarkNote, setBookmarkNote] = React.useState("");
   const [selectedText, setSelectedText] = React.useState("");
+  const [showReminder, setShowReminder] = React.useState(false);
   const [isBookmarking, setIsBookmarking] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const fontSize = useStore((state) => state.fontSize);
   const lineHeight = useStore((state) => state.lineHeight);
+  const colorTemperature = useStore((state) => state.colorTemperature);
+  const pageBrightness = useStore((state) => state.pageBrightness);
+  const paperTexture = useStore((state) => state.paperTexture);
+  const readingReminderMinutes = useStore(
+    (state) => state.readingReminderMinutes,
+  );
   const setReadingContext = useStore((state) => state.setReadingContext);
+  const readerStyle = React.useMemo(
+    () =>
+      ({
+        fontSize,
+        lineHeight,
+        "--reader-warmth": `${colorTemperature / 100}`,
+        "--reader-brightness": `${pageBrightness / 100}`,
+        "--paper-texture-opacity": paperTexture ? "0.22" : "0",
+      }) as React.CSSProperties,
+    [colorTemperature, fontSize, lineHeight, pageBrightness, paperTexture],
+  );
 
   const baseReadingContext = React.useMemo(
     () => ({
@@ -85,6 +105,33 @@ export function ChapterReader({
   React.useEffect(() => {
     void loadBookmarks();
   }, [loadBookmarks]);
+
+  React.useEffect(() => {
+    const scrollPosition = chapter.readingProgress?.scrollPosition ?? 0;
+    if (scrollPosition <= 0) {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      window.scrollTo({ top: scrollPosition, behavior: "auto" });
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [chapter.id, chapter.readingProgress?.scrollPosition]);
+
+  React.useEffect(() => {
+    setShowReminder(false);
+    if (readingReminderMinutes <= 0) {
+      return;
+    }
+
+    const timer = window.setTimeout(
+      () => setShowReminder(true),
+      readingReminderMinutes * 60 * 1000,
+    );
+
+    return () => window.clearTimeout(timer);
+  }, [chapter.id, readingReminderMinutes]);
 
   const persistProgress = React.useCallback(
     async (nextProgress: number) => {
@@ -278,6 +325,26 @@ export function ChapterReader({
               </div>
             )}
 
+            {showReminder && (
+              <div className="mt-4 flex items-start gap-3 rounded-md border border-accent/40 bg-accent/10 px-3 py-3 text-sm">
+                <Bell className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium">{t("reader.restReminder")}</div>
+                  <div className="mt-1 text-muted-foreground">
+                    {t("reader.restReminderBody")}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowReminder(false)}
+                  className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                  aria-label={t("reader.dismissReminder")}
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            )}
+
             <div className="mt-5 border-t pt-4">
               <div className="flex flex-col gap-3 md:flex-row">
                 <textarea
@@ -354,7 +421,8 @@ export function ChapterReader({
           ref={contentRef}
           onMouseUp={handleTextSelection}
           onKeyUp={handleTextSelection}
-          style={{ fontSize, lineHeight }}
+          className="reader-paper rounded-lg"
+          style={readerStyle}
         >
           {chapter.content ? (
             <MarkdownReader

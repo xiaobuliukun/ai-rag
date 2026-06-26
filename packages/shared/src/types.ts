@@ -24,7 +24,27 @@ export interface Chapter {
   progress: number;
   createdAt?: string | Date;
   updatedAt?: string | Date;
+  readingProgress?: ReadingProgress | null;
   children?: Chapter[];
+}
+
+export interface ReadingProgress {
+  id: string;
+  chapterId: string;
+  scrollPosition: number;
+  percentage: number;
+  updatedAt: string | Date;
+}
+
+export interface LibraryStats {
+  totalBooks: number;
+  totalChapters: number;
+  completedChapters: number;
+  inProgressChapters: number;
+  estimatedReadingMinutes: number;
+  learningDays: number;
+  completionRate: number;
+  latestReadAt?: string | Date | null;
 }
 
 export interface SidebarConfig {

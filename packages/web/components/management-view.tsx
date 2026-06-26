@@ -8,6 +8,7 @@ import {
   ArchiveRestore,
   Download,
   FileJson,
+  ImagePlus,
   Loader2,
   Save,
   ScanLine,
@@ -29,6 +30,7 @@ import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 
 const LIBRARY_REFRESH_EVENT = "library:refresh";
+const MAX_COVER_IMAGE_SIZE = 1_500_000;
 
 export function ManagementView() {
   const { t } = useI18n();
@@ -146,6 +148,40 @@ export function ManagementView() {
       setError(err instanceof Error ? err.message : t("management.saveFailed"));
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleCoverFile = async (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+
+    setStatus(null);
+    setError(null);
+
+    if (!file.type.startsWith("image/")) {
+      setError(t("management.coverInvalid"));
+      return;
+    }
+
+    if (file.size > MAX_COVER_IMAGE_SIZE) {
+      setError(t("management.coverTooLarge"));
+      return;
+    }
+
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      setForm((current) => ({
+        ...current,
+        coverImage: dataUrl,
+      }));
+      setStatus(t("management.coverSelected"));
+    } catch {
+      setError(t("management.coverReadFailed"));
     }
   };
 
@@ -416,22 +452,34 @@ export function ManagementView() {
                           className="h-10 w-full rounded-md border bg-background px-3 text-sm outline-none transition-all focus:ring-2 focus:ring-primary/50"
                         />
                       </label>
-                      <label className="block">
+                      <div>
                         <div className="mb-2 text-sm font-medium">
                           {t("management.coverImage")}
                         </div>
-                        <input
-                          value={form.coverImage}
-                          onChange={(event) =>
-                            setForm((current) => ({
-                              ...current,
-                              coverImage: event.target.value,
-                            }))
-                          }
-                          placeholder="cover.png"
-                          className="h-10 w-full rounded-md border bg-background px-3 text-sm outline-none transition-all focus:ring-2 focus:ring-primary/50"
-                        />
-                      </label>
+                        <div className="flex gap-2">
+                          <input
+                            value={form.coverImage}
+                            onChange={(event) =>
+                              setForm((current) => ({
+                                ...current,
+                                coverImage: event.target.value,
+                              }))
+                            }
+                            placeholder="cover.png"
+                            className="h-10 min-w-0 flex-1 rounded-md border bg-background px-3 text-sm outline-none transition-all focus:ring-2 focus:ring-primary/50"
+                          />
+                          <label className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-md border bg-background px-3 text-sm font-medium transition-colors hover:bg-secondary">
+                            <ImagePlus className="h-4 w-4" />
+                            {t("management.chooseCover")}
+                            <input
+                              type="file"
+                              accept="image/*"
+                              onChange={handleCoverFile}
+                              className="hidden"
+                            />
+                          </label>
+                        </div>
+                      </div>
                     </div>
 
                     <button
@@ -535,4 +583,19 @@ function resolveCoverImage(book: Book, coverImage: string) {
   }
 
   return getBookAssetUrl(book.id, coverImage);
+}
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+        return;
+      }
+      reject(new Error("No file data"));
+    });
+    reader.addEventListener("error", () => reject(reader.error));
+    reader.readAsDataURL(file);
+  });
 }

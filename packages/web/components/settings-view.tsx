@@ -2,7 +2,9 @@
 
 import * as React from "react";
 import {
+  Bell,
   Bot,
+  Eye,
   KeyRound,
   Link2,
   Loader2,
@@ -40,6 +42,18 @@ export function SettingsView() {
   const setFontSize = useStore((state) => state.setFontSize);
   const lineHeight = useStore((state) => state.lineHeight);
   const setLineHeight = useStore((state) => state.setLineHeight);
+  const colorTemperature = useStore((state) => state.colorTemperature);
+  const setColorTemperature = useStore((state) => state.setColorTemperature);
+  const pageBrightness = useStore((state) => state.pageBrightness);
+  const setPageBrightness = useStore((state) => state.setPageBrightness);
+  const paperTexture = useStore((state) => state.paperTexture);
+  const setPaperTexture = useStore((state) => state.setPaperTexture);
+  const readingReminderMinutes = useStore(
+    (state) => state.readingReminderMinutes,
+  );
+  const setReadingReminderMinutes = useStore(
+    (state) => state.setReadingReminderMinutes,
+  );
   const locale = useStore((state) => state.locale);
   const setLocale = useStore((state) => state.setLocale);
   const aiConfig = useStore((state) => state.aiConfig);
@@ -198,11 +212,91 @@ export function SettingsView() {
               className="w-full accent-primary"
             />
           </label>
+
+          <label className="block">
+            <div className="mb-2 flex items-center justify-between text-sm">
+              <span className="inline-flex items-center gap-2 font-medium">
+                <Eye className="h-4 w-4" />
+                {t("settings.colorTemperature")}
+              </span>
+              <span className="text-muted-foreground">{colorTemperature}%</span>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              step="1"
+              value={colorTemperature}
+              onChange={(event) =>
+                setColorTemperature(Number(event.target.value))
+              }
+              className="w-full accent-primary"
+            />
+          </label>
+
+          <label className="block">
+            <div className="mb-2 flex items-center justify-between text-sm">
+              <span className="font-medium">{t("settings.brightness")}</span>
+              <span className="text-muted-foreground">{pageBrightness}%</span>
+            </div>
+            <input
+              type="range"
+              min="82"
+              max="108"
+              step="1"
+              value={pageBrightness}
+              onChange={(event) => setPageBrightness(Number(event.target.value))}
+              className="w-full accent-primary"
+            />
+          </label>
+
+          <label className="block">
+            <div className="mb-2 flex items-center justify-between text-sm">
+              <span className="inline-flex items-center gap-2 font-medium">
+                <Bell className="h-4 w-4" />
+                {t("settings.readingReminder")}
+              </span>
+              <span className="text-muted-foreground">
+                {readingReminderMinutes > 0
+                  ? t("settings.minutesValue", {
+                      minutes: readingReminderMinutes,
+                    })
+                  : t("settings.off")}
+              </span>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="90"
+              step="5"
+              value={readingReminderMinutes}
+              onChange={(event) =>
+                setReadingReminderMinutes(Number(event.target.value))
+              }
+              className="w-full accent-primary"
+            />
+          </label>
+
+          <label className="flex items-center justify-between gap-4 rounded-md border bg-background px-4 py-3 text-sm">
+            <span className="font-medium">{t("settings.paperTexture")}</span>
+            <input
+              type="checkbox"
+              checked={paperTexture}
+              onChange={(event) => setPaperTexture(event.target.checked)}
+              className="h-4 w-4 accent-primary"
+            />
+          </label>
         </div>
 
         <div
-          className="rounded-md border bg-background p-5 text-foreground"
-          style={{ fontSize, lineHeight }}
+          className="reader-paper rounded-md border bg-background p-5 text-foreground"
+          style={{
+            fontSize,
+            lineHeight,
+            "--reader-warmth": `${colorTemperature / 100}`,
+            "--reader-brightness": `${pageBrightness / 100}`,
+            "--paper-texture-opacity": paperTexture ? "0.22" : "0",
+          } as React.CSSProperties}
         >
           <p className="font-semibold">{t("settings.preview")}</p>
           <p className="mt-2 text-muted-foreground">
