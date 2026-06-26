@@ -11,6 +11,7 @@ import {
   Monitor,
   Moon,
   Save,
+  SlidersHorizontal,
   Sun,
   Type,
 } from "lucide-react";
@@ -100,6 +101,9 @@ export function SettingsView() {
             baseUrl: config.baseUrl,
             model: config.model,
             apiKey: config.apiKey,
+            ragSourceCount: config.ragSourceCount,
+            ragContextChars: config.ragContextChars,
+            ragExcerptChars: config.ragExcerptChars,
           });
         }
       })
@@ -124,6 +128,9 @@ export function SettingsView() {
         baseUrl: saved.baseUrl,
         model: saved.model,
         apiKey: saved.apiKey,
+        ragSourceCount: saved.ragSourceCount,
+        ragContextChars: saved.ragContextChars,
+        ragExcerptChars: saved.ragExcerptChars,
       });
       setAIStatus(t("settings.aiSaved"));
     } catch (err) {
@@ -418,6 +425,73 @@ export function SettingsView() {
           />
         </label>
 
+        <div className="space-y-5 rounded-md border bg-background p-4">
+          <div className="flex items-center gap-2 text-sm font-semibold">
+            <SlidersHorizontal className="h-4 w-4" />
+            {t("settings.rag")}
+          </div>
+
+          <label className="block">
+            <div className="mb-2 flex items-center justify-between text-sm">
+              <span className="font-medium">{t("settings.ragSourceCount")}</span>
+              <span className="text-muted-foreground">
+                {aiConfig.ragSourceCount ?? 5}
+              </span>
+            </div>
+            <input
+              type="range"
+              min="2"
+              max="10"
+              step="1"
+              value={aiConfig.ragSourceCount ?? 5}
+              onChange={(event) =>
+                setAIConfig({ ragSourceCount: Number(event.target.value) })
+              }
+              className="w-full accent-primary"
+            />
+          </label>
+
+          <label className="block">
+            <div className="mb-2 flex items-center justify-between text-sm">
+              <span className="font-medium">{t("settings.ragContextChars")}</span>
+              <span className="text-muted-foreground">
+                {formatChars(aiConfig.ragContextChars ?? 12000)}
+              </span>
+            </div>
+            <input
+              type="range"
+              min="4000"
+              max="24000"
+              step="1000"
+              value={aiConfig.ragContextChars ?? 12000}
+              onChange={(event) =>
+                setAIConfig({ ragContextChars: Number(event.target.value) })
+              }
+              className="w-full accent-primary"
+            />
+          </label>
+
+          <label className="block">
+            <div className="mb-2 flex items-center justify-between text-sm">
+              <span className="font-medium">{t("settings.ragExcerptChars")}</span>
+              <span className="text-muted-foreground">
+                {aiConfig.ragExcerptChars ?? 520}
+              </span>
+            </div>
+            <input
+              type="range"
+              min="240"
+              max="900"
+              step="20"
+              value={aiConfig.ragExcerptChars ?? 520}
+              onChange={(event) =>
+                setAIConfig({ ragExcerptChars: Number(event.target.value) })
+              }
+              className="w-full accent-primary"
+            />
+          </label>
+        </div>
+
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"
@@ -446,4 +520,12 @@ export function SettingsView() {
       </section>
     </div>
   );
+}
+
+function formatChars(value: number) {
+  if (value >= 1000) {
+    return `${Math.round(value / 1000)}k`;
+  }
+
+  return String(value);
 }

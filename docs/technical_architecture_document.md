@@ -67,6 +67,7 @@ graph TD
 | 路由                             | 用途             |
 | ------------------------------ | -------------- |
 | `/`                            | 首页，显示书籍库和阅读统计  |
+| `/book/[bookId]`               | 书籍章节列表        |
 | `/book/[bookId]/[chapterId]`   | 阅读器页面，三栏式布局    |
 | `/search`                      | 全局搜索页面         |
 | `/management`                  | 书籍管理页面         |
@@ -75,6 +76,8 @@ graph TD
 | `/api/books/:bookId/chapters/:chapterId` | 章节数据API |
 | `/api/search`                  | 搜索API          |
 | `/api/ai/chat`                 | AI对话API        |
+| `/api/ai/chat/stream`          | AI 流式对话 API    |
+| `/api/ai/config`               | AI 与 RAG 参数配置 API |
 | `/api/books/stats`             | 阅读统计API        |
 
 ## 4. API定义
@@ -87,36 +90,19 @@ graph TD
 GET /api/books
 ```
 
-响应：
-
-```json
-{
-  "books": [
-    {
-      "id": "string",
-      "title": "string",
-      "path": "string",
-      "coverImage": "string",
-      "lastRead": "datetime",
-      "progress": "number",
-      "totalChapters": "number",
-      "readChapters": "number"
-    }
-  ]
-}
-```
+响应为书籍数组，每项包含 `chapters`、`totalChapters`、`readChapters`、`tags` 等字段。
 
 **扫描文件夹**
 
 ```
-POST /api/books/scan
+POST /api/scan
 ```
 
 请求：
 
 ```json
 {
-  "folderPath": "string"
+  "path": "string"
 }
 ```
 
@@ -125,16 +111,16 @@ POST /api/books/scan
 **更新阅读进度**
 
 ```
-POST /api/chapters/progress
+PUT /api/books/:bookId/chapters/:chapterId/progress
 ```
 
 请求：
 
 ```json
 {
-  "chapterId": "string",
   "progress": "number",
-  "isRead": "boolean"
+  "scrollPosition": "number",
+  "readingSecondsDelta": "number"
 }
 ```
 
@@ -156,7 +142,15 @@ POST /api/ai/chat
     "chapterId": "string",
     "selectedText": "string"
   },
-  "model": "string"
+  "config": {
+    "mode": "local|openai-compatible",
+    "baseUrl": "string",
+    "model": "string",
+    "apiKey": "string",
+    "ragSourceCount": "number",
+    "ragContextChars": "number",
+    "ragExcerptChars": "number"
+  }
 }
 ```
 
@@ -164,15 +158,27 @@ POST /api/ai/chat
 
 ```json
 {
-  "response": "string",
+  "answer": "string",
+  "mode": "local-extractive|openai-compatible",
   "sources": [
     {
       "chapterId": "string",
+      "chapterTitle": "string",
+      "excerpt": "string",
       "relevance": "number"
     }
   ]
 }
 ```
+
+**读取/保存 AI 与 RAG 配置**
+
+```
+GET /api/ai/config
+PUT /api/ai/config
+```
+
+配置项包括模型模式、OpenAI-compatible 连接信息、API Key，以及 RAG 的引用数量、上下文字数、摘录长度。API Key 在数据库中加密保存，备份导出时脱敏。
 
 ### 4.4 搜索API
 

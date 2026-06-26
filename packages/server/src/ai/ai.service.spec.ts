@@ -1,5 +1,27 @@
 import { BadRequestException } from '@nestjs/common';
 import { AiService } from './ai.service';
+import { encryptSecret } from './secrets';
+
+type AiConfigRecord = {
+  id: string;
+  mode: string;
+  baseUrl: string | null;
+  model: string | null;
+  apiKey: string | null;
+  ragSourceCount: number;
+  ragContextChars: number;
+  ragExcerptChars: number;
+  updatedAt: Date;
+};
+
+type AiConfigUpsertPayload = {
+  create: {
+    apiKey: string | null;
+    ragSourceCount: number;
+    ragContextChars: number;
+    ragExcerptChars: number;
+  };
+};
 
 describe('AiService', () => {
   const prisma = {
@@ -8,6 +30,11 @@ describe('AiService', () => {
     },
     chapterChunk: {
       findMany: jest.fn(),
+    },
+    aiConfig: {
+      findUnique: jest.fn<() => Promise<AiConfigRecord | null>>(),
+      upsert:
+        jest.fn<(payload: AiConfigUpsertPayload) => Promise<AiConfigRecord>>(),
     },
   };
   const contentIndex = {
@@ -21,6 +48,7 @@ describe('AiService', () => {
     jest.clearAllMocks();
     contentIndex.search.mockResolvedValue([]);
     contentIndex.semanticSearch.mockResolvedValue([]);
+    prisma.aiConfig.findUnique.mockResolvedValue(null);
     service = new AiService(prisma as never, contentIndex as never);
   });
 
@@ -178,6 +206,87 @@ describe('AiService', () => {
       'react hooks',
       expect.objectContaining({ mode: 'and' }),
     );
+  });
+
+  it('limits sources and excerpts from RAG runtime config', async () => {
+    prisma.chapterChunk.findMany.mockResolvedValue([]);
+    prisma.chapter.findMany.mockResolvedValue([]);
+    const longContent =
+      'React hooks let components share stateful logic across multiple focused examples. '.repeat(
+        8,
+      );
+    contentIndex.search.mockResolvedValue(
+      Array.from({ length: 4 }, (_, index) => ({
+        chunkId: `chunk-${index + 1}`,
+        bookId: 'book-1',
+        chapterId: `chapter-${index + 1}`,
+        bookTitle: 'React Patterns',
+        chapterTitle: `Hooks ${index + 1}`,
+        content: longContent,
+        excerpt: longContent,
+        highlightedExcerpt: longContent,
+        score: 30 - index,
+      })),
+    );
+
+    const response = await service.chat({
+      message: 'React hooks',
+      context: { bookId: 'book-1' },
+      config: {
+        mode: 'local',
+        ragSourceCount: 2,
+        ragExcerptChars: 240,
+      },
+    });
+
+    expect(response.sources).toHaveLength(2);
+    expect(response.sources[0].excerpt.length).toBeLessThanOrEqual(240);
+  });
+
+  it('persists bounded RAG settings with encrypted API keys', async () => {
+    const updatedAt = new Date('2026-06-26T00:00:00.000Z');
+    let capturedPayload: AiConfigUpsertPayload | undefined;
+    prisma.aiConfig.upsert.mockImplementation(
+      (payload: AiConfigUpsertPayload) => {
+        capturedPayload = payload;
+        return Promise.resolve({
+          id: 'default',
+          mode: 'openai-compatible',
+          baseUrl: 'https://api.example.com/v1',
+          model: 'gpt-test',
+          apiKey: encryptSecret('sk-test'),
+          ragSourceCount: 10,
+          ragContextChars: 4000,
+          ragExcerptChars: 900,
+          updatedAt,
+        });
+      },
+    );
+
+    await expect(
+      service.updateConfig({
+        mode: 'openai-compatible',
+        baseUrl: 'https://api.example.com/v1',
+        model: 'gpt-test',
+        apiKey: 'sk-test',
+        ragSourceCount: 99,
+        ragContextChars: 100,
+        ragExcerptChars: 9999,
+      }),
+    ).resolves.toMatchObject({
+      mode: 'openai-compatible',
+      apiKey: 'sk-test',
+      ragSourceCount: 10,
+      ragContextChars: 4000,
+      ragExcerptChars: 900,
+      updatedAt,
+    });
+
+    expect(capturedPayload).toBeDefined();
+    expect(capturedPayload?.create.apiKey).toMatch(/^enc:v1:/);
+    expect(capturedPayload?.create.ragSourceCount).toBe(10);
+    expect(capturedPayload?.create.ragContextChars).toBe(4000);
+    expect(capturedPayload?.create.ragExcerptChars).toBe(900);
   });
 
   it('streams local answers with sources and a final response', async () => {

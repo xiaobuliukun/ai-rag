@@ -88,13 +88,16 @@ model Bookmark {
 }
 
 model AiConfig {
-  id        String   @id
-  mode      String   @default("local")
-  baseUrl   String?
-  model     String?
-  apiKey    String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id              String   @id
+  mode            String   @default("local")
+  baseUrl         String?
+  model           String?
+  apiKey          String?
+  ragSourceCount  Int      @default(5)
+  ragContextChars Int      @default(12000)
+  ragExcerptChars Int      @default(520)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 }
 
 model VectorData {

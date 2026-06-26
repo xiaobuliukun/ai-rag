@@ -124,6 +124,9 @@ export interface AiRuntimeConfig {
   baseUrl?: string;
   model?: string;
   apiKey?: string;
+  ragSourceCount?: number;
+  ragContextChars?: number;
+  ragExcerptChars?: number;
 }
 
 export interface PersistedAiConfig extends AiRuntimeConfig {

@@ -107,6 +107,9 @@ export const useStore = create<AppState>()(
         baseUrl: "https://api.openai.com/v1",
         model: "gpt-4o-mini",
         apiKey: "",
+        ragSourceCount: 5,
+        ragContextChars: 12000,
+        ragExcerptChars: 520,
       },
       setAIConfig: (config) =>
         set((state) => ({

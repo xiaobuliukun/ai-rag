@@ -25,6 +25,12 @@ Prisma 使用 SQLite。默认数据库路径按顺序查找：
 npm exec -w packages/server prisma migrate dev
 ```
 
+非交互环境应用已提交迁移：
+
+```bash
+npm exec -w packages/server prisma migrate deploy
+```
+
 ## Main API
 
 - `GET /api/books`
@@ -42,3 +48,4 @@ npm exec -w packages/server prisma migrate dev
 - `GET /api/assets/books/:bookId/files`
 
 AI 默认使用本地抽取式回答；配置 OpenAI-compatible `baseUrl`、`model`、`apiKey` 后，会调用兼容 `/chat/completions` 的模型接口。
+建议设置 `AI_CONFIG_SECRET` 用于本地加密保存 API Key；未设置时会使用本地 fallback secret。RAG 可配置引用数量、模型上下文字数和单条摘录长度。

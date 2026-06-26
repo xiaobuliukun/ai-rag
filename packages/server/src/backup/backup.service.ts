@@ -75,6 +75,9 @@ export class BackupService {
             baseUrl: aiConfig.baseUrl ?? undefined,
             model: aiConfig.model ?? undefined,
             apiKey: undefined,
+            ragSourceCount: aiConfig.ragSourceCount,
+            ragContextChars: aiConfig.ragContextChars,
+            ragExcerptChars: aiConfig.ragExcerptChars,
             updatedAt: aiConfig.updatedAt,
           }
         : null,
@@ -175,6 +178,9 @@ export class BackupService {
             baseUrl: payload.aiConfig.baseUrl ?? null,
             model: payload.aiConfig.model ?? null,
             apiKey: encryptSecret(payload.aiConfig.apiKey),
+            ragSourceCount: payload.aiConfig.ragSourceCount ?? 5,
+            ragContextChars: payload.aiConfig.ragContextChars ?? 12000,
+            ragExcerptChars: payload.aiConfig.ragExcerptChars ?? 520,
           },
         });
       }

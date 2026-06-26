@@ -20,11 +20,18 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { decryptSecret, encryptSecret } from './secrets';
 
-const MAX_SOURCE_COUNT = 5;
+const DEFAULT_RAG_SOURCE_COUNT = 5;
+const MIN_RAG_SOURCE_COUNT = 2;
+const MAX_RAG_SOURCE_COUNT = 10;
+const DEFAULT_RAG_CONTEXT_CHARS = 12000;
+const MIN_RAG_CONTEXT_CHARS = 4000;
+const MAX_RAG_CONTEXT_CHARS = 24000;
+const DEFAULT_RAG_EXCERPT_CHARS = 520;
+const MIN_RAG_EXCERPT_CHARS = 240;
+const MAX_RAG_EXCERPT_CHARS = 900;
 const MAX_SOURCES_PER_CHAPTER = 1;
 const MAX_CHAPTERS = 250;
 const MAX_SELECTED_TEXT = 2000;
-const MAX_MODEL_CONTEXT_CHARS = 12000;
 const STREAM_CHUNK_SIZE = 80;
 const DEFAULT_AI_CONFIG_ID = 'default';
 const CJK_STOP_CHARACTERS = new Set([
@@ -124,6 +131,9 @@ export class AiService {
       baseUrl: config.baseUrl,
       model: config.model,
       apiKey: config.apiKey,
+      ragSourceCount: config.ragSourceCount,
+      ragContextChars: config.ragContextChars,
+      ragExcerptChars: config.ragExcerptChars,
       updatedAt: persisted?.updatedAt,
     };
   }
@@ -133,6 +143,8 @@ export class AiService {
       throw new BadRequestException('Unsupported AI mode');
     }
 
+    const ragConfig = this.normalizeRagConfig(config);
+
     const saved = await this.prisma.aiConfig.upsert({
       where: { id: DEFAULT_AI_CONFIG_ID },
       update: {
@@ -140,6 +152,9 @@ export class AiService {
         baseUrl: config.baseUrl?.trim() || null,
         model: config.model?.trim() || null,
         apiKey: encryptSecret(config.apiKey),
+        ragSourceCount: ragConfig.ragSourceCount,
+        ragContextChars: ragConfig.ragContextChars,
+        ragExcerptChars: ragConfig.ragExcerptChars,
       },
       create: {
         id: DEFAULT_AI_CONFIG_ID,
@@ -147,8 +162,13 @@ export class AiService {
         baseUrl: config.baseUrl?.trim() || null,
         model: config.model?.trim() || null,
         apiKey: encryptSecret(config.apiKey),
+        ragSourceCount: ragConfig.ragSourceCount,
+        ragContextChars: ragConfig.ragContextChars,
+        ragExcerptChars: ragConfig.ragExcerptChars,
       },
     });
+
+    const savedRagConfig = this.normalizeRagConfig(saved);
 
     return {
       id: saved.id,
@@ -156,6 +176,9 @@ export class AiService {
       baseUrl: saved.baseUrl ?? undefined,
       model: saved.model ?? undefined,
       apiKey: decryptSecret(saved.apiKey),
+      ragSourceCount: savedRagConfig.ragSourceCount,
+      ragContextChars: savedRagConfig.ragContextChars,
+      ragExcerptChars: savedRagConfig.ragExcerptChars,
       updatedAt: saved.updatedAt,
     };
   }
@@ -310,14 +333,19 @@ export class AiService {
       throw new BadRequestException('Message is required');
     }
 
+    const config = await this.resolveConfig(request.config);
+
     return {
       message,
-      sources: await this.retrieveSources(request),
-      config: await this.resolveConfig(request.config),
+      sources: await this.retrieveSources(request, config),
+      config,
     };
   }
 
-  private async retrieveSources(request: AiChatRequest): Promise<AiSource[]> {
+  private async retrieveSources(
+    request: AiChatRequest,
+    config: Required<AiRuntimeConfig>,
+  ): Promise<AiSource[]> {
     const context = request.context;
     const selectedText =
       context?.selectedText?.slice(0, MAX_SELECTED_TEXT) ?? '';
@@ -336,8 +364,16 @@ export class AiService {
             take: 20,
           })
         : Promise.resolve([]),
-      this.retrieveIndexedMatches(searchQuery, context?.bookId),
-      this.retrieveSemanticMatches(queryText, context?.bookId),
+      this.retrieveIndexedMatches(
+        searchQuery,
+        context?.bookId,
+        config.ragSourceCount,
+      ),
+      this.retrieveSemanticMatches(
+        queryText,
+        context?.bookId,
+        config.ragSourceCount,
+      ),
     ]);
 
     const matchingChunks =
@@ -418,14 +454,17 @@ export class AiService {
 
     const ranked = this.pickTopChunks([...indexedChunks, ...fallbackChunks])
       .filter((chunk) => chunk.text.trim().length > 0 && chunk.score > 0)
-      .slice(0, MAX_SOURCE_COUNT);
+      .slice(0, config.ragSourceCount);
 
-    return ranked.map((chunk, index) => this.toSource(chunk, index));
+    return ranked.map((chunk, index) =>
+      this.toSource(chunk, index, config.ragExcerptChars),
+    );
   }
 
   private async retrieveIndexedMatches(
     searchQuery: string,
     bookId?: string,
+    sourceCount = DEFAULT_RAG_SOURCE_COUNT,
   ): Promise<ContentSearchResult[]> {
     if (!searchQuery) {
       return [];
@@ -437,7 +476,7 @@ export class AiService {
       mode: 'and',
     });
 
-    if (strictMatches.length >= MAX_SOURCE_COUNT) {
+    if (strictMatches.length >= sourceCount) {
       return strictMatches;
     }
 
@@ -463,6 +502,7 @@ export class AiService {
   private retrieveSemanticMatches(
     query: string,
     bookId?: string,
+    sourceCount = DEFAULT_RAG_SOURCE_COUNT,
   ): Promise<SemanticSearchResult[]> {
     if (!query.trim()) {
       return Promise.resolve([]);
@@ -470,7 +510,7 @@ export class AiService {
 
     return this.contentIndex.semanticSearch(query, {
       bookId,
-      limit: MAX_SOURCE_COUNT * 4,
+      limit: sourceCount * 4,
     });
   }
 
@@ -643,14 +683,18 @@ export class AiService {
     return [...picked, ...overflow];
   }
 
-  private toSource(chunk: RankedChunk, index: number): AiSource {
+  private toSource(
+    chunk: RankedChunk,
+    index: number,
+    excerptChars = DEFAULT_RAG_EXCERPT_CHARS,
+  ): AiSource {
     return {
       id: chunk.id || `${chunk.chapter.id}-${index}`,
       bookId: chunk.chapter.bookId,
       chapterId: chunk.chapter.id,
       bookTitle: chunk.chapter.book.title,
       chapterTitle: chunk.chapter.title,
-      excerpt: this.trimExcerpt(chunk.text, 520),
+      excerpt: this.trimExcerpt(chunk.text, excerptChars),
       relevance: Math.max(1, Math.round(chunk.score)),
     };
   }
@@ -682,6 +726,20 @@ export class AiService {
     const envBaseUrl = process.env.AI_BASE_URL || process.env.OPENAI_BASE_URL;
     const envApiKey = process.env.AI_API_KEY || process.env.OPENAI_API_KEY;
     const envModel = process.env.AI_MODEL || process.env.OPENAI_MODEL;
+    const ragConfig = this.normalizeRagConfig({
+      ragSourceCount:
+        config?.ragSourceCount ??
+        persisted?.ragSourceCount ??
+        toOptionalNumber(process.env.AI_RAG_SOURCE_COUNT),
+      ragContextChars:
+        config?.ragContextChars ??
+        persisted?.ragContextChars ??
+        toOptionalNumber(process.env.AI_RAG_CONTEXT_CHARS),
+      ragExcerptChars:
+        config?.ragExcerptChars ??
+        persisted?.ragExcerptChars ??
+        toOptionalNumber(process.env.AI_RAG_EXCERPT_CHARS),
+    });
     const mode =
       config?.mode ??
       persisted?.mode ??
@@ -696,6 +754,36 @@ export class AiService {
         'https://api.openai.com/v1',
       apiKey: config?.apiKey || persisted?.apiKey || envApiKey || '',
       model: config?.model || persisted?.model || envModel || 'gpt-4o-mini',
+      ragSourceCount: ragConfig.ragSourceCount,
+      ragContextChars: ragConfig.ragContextChars,
+      ragExcerptChars: ragConfig.ragExcerptChars,
+    };
+  }
+
+  private normalizeRagConfig(config: {
+    ragSourceCount?: unknown;
+    ragContextChars?: unknown;
+    ragExcerptChars?: unknown;
+  }) {
+    return {
+      ragSourceCount: clampInteger(
+        config.ragSourceCount,
+        MIN_RAG_SOURCE_COUNT,
+        MAX_RAG_SOURCE_COUNT,
+        DEFAULT_RAG_SOURCE_COUNT,
+      ),
+      ragContextChars: clampInteger(
+        config.ragContextChars,
+        MIN_RAG_CONTEXT_CHARS,
+        MAX_RAG_CONTEXT_CHARS,
+        DEFAULT_RAG_CONTEXT_CHARS,
+      ),
+      ragExcerptChars: clampInteger(
+        config.ragExcerptChars,
+        MIN_RAG_EXCERPT_CHARS,
+        MAX_RAG_EXCERPT_CHARS,
+        DEFAULT_RAG_EXCERPT_CHARS,
+      ),
     };
   }
 
@@ -718,11 +806,16 @@ export class AiService {
       return null;
     }
 
+    const ragConfig = this.normalizeRagConfig(saved);
+
     return {
       mode: saved.mode === 'openai-compatible' ? 'openai-compatible' : 'local',
       baseUrl: saved.baseUrl ?? undefined,
       model: saved.model ?? undefined,
       apiKey: decryptSecret(saved.apiKey),
+      ragSourceCount: ragConfig.ragSourceCount,
+      ragContextChars: ragConfig.ragContextChars,
+      ragExcerptChars: ragConfig.ragExcerptChars,
       updatedAt: saved.updatedAt,
     } satisfies AiRuntimeConfig & { updatedAt?: Date };
   }
@@ -739,7 +832,7 @@ export class AiService {
           `[${index + 1}] ${source.bookTitle} / ${source.chapterTitle}\n${source.excerpt}`,
       )
       .join('\n\n')
-      .slice(0, MAX_MODEL_CONTEXT_CHARS);
+      .slice(0, config.ragContextChars);
 
     const selectedText = request.context?.selectedText
       ? `\nSelected text:\n${request.context.selectedText.slice(0, MAX_SELECTED_TEXT)}`
@@ -804,7 +897,7 @@ export class AiService {
           `[${index + 1}] ${source.bookTitle} / ${source.chapterTitle}\n${source.excerpt}`,
       )
       .join('\n\n')
-      .slice(0, MAX_MODEL_CONTEXT_CHARS);
+      .slice(0, config.ragContextChars);
 
     const selectedText = request.context?.selectedText
       ? `\nSelected text:\n${request.context.selectedText.slice(0, MAX_SELECTED_TEXT)}`
@@ -920,4 +1013,28 @@ export class AiService {
     }
     return chunks;
   }
+}
+
+function clampInteger(
+  value: unknown,
+  min: number,
+  max: number,
+  fallback: number,
+) {
+  const numberValue =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string'
+        ? Number(value)
+        : Number.NaN;
+
+  if (!Number.isFinite(numberValue)) {
+    return fallback;
+  }
+
+  return Math.min(max, Math.max(min, Math.round(numberValue)));
+}
+
+function toOptionalNumber(value?: string) {
+  return value === undefined ? undefined : Number(value);
 }
