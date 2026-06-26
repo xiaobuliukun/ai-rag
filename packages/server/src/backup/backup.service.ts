@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import type { BackupPayload, ImportBackupResponse } from '@juejin-flow/shared';
+import { encryptSecret } from '../ai/secrets';
 import { ContentIndexService } from '../content/content-index.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -18,6 +19,7 @@ export class BackupService {
         include: {
           chapters: {
             include: {
+              readingProgress: true,
               chunks: {
                 select: {
                   chunkIndex: true,
@@ -72,7 +74,7 @@ export class BackupService {
                 : 'local',
             baseUrl: aiConfig.baseUrl ?? undefined,
             model: aiConfig.model ?? undefined,
-            apiKey: aiConfig.apiKey ?? undefined,
+            apiKey: undefined,
             updatedAt: aiConfig.updatedAt,
           }
         : null,
@@ -136,6 +138,18 @@ export class BackupService {
               })),
             });
           }
+
+          if (chapter.readingProgress) {
+            await tx.readingProgress.create({
+              data: {
+                id: chapter.readingProgress.id,
+                chapterId: chapter.id,
+                percentage: chapter.readingProgress.percentage,
+                scrollPosition: chapter.readingProgress.scrollPosition,
+                readingSeconds: chapter.readingProgress.readingSeconds ?? 0,
+              },
+            });
+          }
         }
       }
 
@@ -160,7 +174,7 @@ export class BackupService {
             mode: payload.aiConfig.mode,
             baseUrl: payload.aiConfig.baseUrl ?? null,
             model: payload.aiConfig.model ?? null,
-            apiKey: payload.aiConfig.apiKey ?? null,
+            apiKey: encryptSecret(payload.aiConfig.apiKey),
           },
         });
       }

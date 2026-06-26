@@ -9,7 +9,13 @@ import { Menu, PanelRightClose, PanelRightOpen } from "lucide-react"
 import { useI18n } from "@/lib/i18n"
 
 export function ClientLayout({ children }: { children: React.ReactNode }) {
-  const { isSidebarOpen, toggleSidebar, isAIPanelOpen, toggleAIPanel } = useStore()
+  const {
+    isSidebarOpen,
+    toggleSidebar,
+    isAIPanelOpen,
+    toggleAIPanel,
+    aiPanelWidth,
+  } = useStore()
   const { t } = useI18n()
 
   return (
@@ -22,8 +28,8 @@ export function ClientLayout({ children }: { children: React.ReactNode }) {
         className={cn(
           "flex-1 flex flex-col transition-all duration-300 ease-in-out",
           isSidebarOpen ? "ml-64" : "ml-0",
-          isAIPanelOpen ? "mr-96" : "mr-0"
         )}
+        style={{ marginRight: isAIPanelOpen ? aiPanelWidth : 0 }}
       >
         {/* Header / Toolbar (optional, usually per page, but global toggle is useful) */}
         <header className="h-14 border-b flex items-center justify-between px-4 sticky top-0 bg-background/80 backdrop-blur z-30">

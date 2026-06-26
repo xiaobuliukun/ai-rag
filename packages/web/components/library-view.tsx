@@ -91,6 +91,12 @@ export function LibraryView() {
     }
   };
 
+  const displayedReadingMinutes = stats
+    ? stats.readingMinutes > 0
+      ? stats.readingMinutes
+      : stats.estimatedReadingMinutes
+    : 0;
+
   return (
     <div className="space-y-8">
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_24rem] xl:items-start">
@@ -178,8 +184,12 @@ export function LibraryView() {
           <StatCard
             icon={Timer}
             label={t("stats.readingTime")}
-            value={formatMinutes(stats.estimatedReadingMinutes, t)}
-            helper={t("stats.estimated")}
+            value={formatMinutes(displayedReadingMinutes, t)}
+            helper={
+              stats.readingMinutes > 0
+                ? t("stats.recorded")
+                : t("stats.estimated")
+            }
           />
           <StatCard
             icon={CalendarDays}

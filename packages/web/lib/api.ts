@@ -90,10 +90,11 @@ export function updateChapterProgress(
   chapterId: string,
   progress: number,
   scrollPosition = 0,
+  readingSecondsDelta = 0,
 ) {
   return fetchJson<Chapter>(`/books/${bookId}/chapters/${chapterId}/progress`, {
     method: "PUT",
-    body: JSON.stringify({ progress, scrollPosition }),
+    body: JSON.stringify({ progress, scrollPosition, readingSecondsDelta }),
   });
 }
 

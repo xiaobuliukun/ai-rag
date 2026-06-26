@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { useStore } from "@/store/useStore";
 import { useI18n, type Locale } from "@/lib/i18n";
 import { getAIConfig, saveAIConfig } from "@/lib/api";
+import { getEffectiveBrightnessPercent } from "@/lib/reader-preferences";
 
 const themeOptions = [
   { value: "system", labelKey: "settings.system", icon: Monitor },
@@ -46,6 +47,8 @@ export function SettingsView() {
   const setColorTemperature = useStore((state) => state.setColorTemperature);
   const pageBrightness = useStore((state) => state.pageBrightness);
   const setPageBrightness = useStore((state) => state.setPageBrightness);
+  const autoBrightness = useStore((state) => state.autoBrightness);
+  const setAutoBrightness = useStore((state) => state.setAutoBrightness);
   const paperTexture = useStore((state) => state.paperTexture);
   const setPaperTexture = useStore((state) => state.setPaperTexture);
   const readingReminderMinutes = useStore(
@@ -61,10 +64,30 @@ export function SettingsView() {
   const [isSavingAI, setIsSavingAI] = React.useState(false);
   const [aiStatus, setAIStatus] = React.useState<string | null>(null);
   const [aiError, setAIError] = React.useState<string | null>(null);
+  const [brightnessClock, setBrightnessClock] = React.useState(() => new Date());
+
+  const effectiveBrightness = React.useMemo(
+    () =>
+      getEffectiveBrightnessPercent(
+        pageBrightness,
+        autoBrightness,
+        brightnessClock,
+      ),
+    [autoBrightness, brightnessClock, pageBrightness],
+  );
 
   React.useEffect(() => {
     setMounted(true);
   }, []);
+
+  React.useEffect(() => {
+    if (!autoBrightness) {
+      return;
+    }
+
+    const timer = window.setInterval(() => setBrightnessClock(new Date()), 60000);
+    return () => window.clearInterval(timer);
+  }, [autoBrightness]);
 
   React.useEffect(() => {
     let isCancelled = false;
@@ -237,7 +260,13 @@ export function SettingsView() {
           <label className="block">
             <div className="mb-2 flex items-center justify-between text-sm">
               <span className="font-medium">{t("settings.brightness")}</span>
-              <span className="text-muted-foreground">{pageBrightness}%</span>
+              <span className="text-muted-foreground">
+                {autoBrightness
+                  ? t("settings.effectiveBrightness", {
+                      brightness: effectiveBrightness,
+                    })
+                  : `${pageBrightness}%`}
+              </span>
             </div>
             <input
               type="range"
@@ -247,6 +276,16 @@ export function SettingsView() {
               value={pageBrightness}
               onChange={(event) => setPageBrightness(Number(event.target.value))}
               className="w-full accent-primary"
+            />
+          </label>
+
+          <label className="flex items-center justify-between gap-4 rounded-md border bg-background px-4 py-3 text-sm">
+            <span className="font-medium">{t("settings.autoBrightness")}</span>
+            <input
+              type="checkbox"
+              checked={autoBrightness}
+              onChange={(event) => setAutoBrightness(event.target.checked)}
+              className="h-4 w-4 accent-primary"
             />
           </label>
 
@@ -294,7 +333,7 @@ export function SettingsView() {
             fontSize,
             lineHeight,
             "--reader-warmth": `${colorTemperature / 100}`,
-            "--reader-brightness": `${pageBrightness / 100}`,
+            "--reader-brightness": `${effectiveBrightness / 100}`,
             "--paper-texture-opacity": paperTexture ? "0.22" : "0",
           } as React.CSSProperties}
         >

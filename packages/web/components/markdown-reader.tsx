@@ -5,8 +5,8 @@ import Image from "next/image";
 import ReactMarkdown from "react-markdown";
 import { Check, Copy } from "lucide-react";
 import { ComponentPropsWithoutRef, CSSProperties } from "react";
-import { getBookAssetUrl } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { resolveMarkdownImageSrc } from "@/lib/markdown-images";
 
 interface MarkdownReaderProps {
   content: string;
@@ -64,23 +64,7 @@ export function MarkdownReader({
                 chapterFileName,
               );
 
-              if (!resolvedSrc) {
-                return null;
-              }
-
-              return (
-                <span className="my-6 block overflow-hidden rounded-lg border bg-card">
-                  <Image
-                    src={resolvedSrc}
-                    alt={typeof alt === "string" ? alt : ""}
-                    width={960}
-                    height={540}
-                    sizes="(max-width: 768px) 100vw, 768px"
-                    unoptimized
-                    className="h-auto w-full object-contain"
-                  />
-                </span>
-              );
+              return <MarkdownImage src={resolvedSrc} alt={String(alt ?? "")} />;
             },
           }}
         >
@@ -88,6 +72,35 @@ export function MarkdownReader({
         </ReactMarkdown>
       </article>
     </div>
+  );
+}
+
+function MarkdownImage({ src, alt }: { src: string; alt: string }) {
+  const [failed, setFailed] = React.useState(false);
+
+  if (!src) {
+    return null;
+  }
+
+  return (
+    <span className="my-6 block overflow-hidden rounded-lg border bg-card">
+      {failed ? (
+        <span className="block bg-muted px-4 py-5 text-sm text-muted-foreground">
+          {alt || "Image"} · {src}
+        </span>
+      ) : (
+        <Image
+          src={src}
+          alt={alt}
+          width={960}
+          height={540}
+          sizes="(max-width: 768px) 100vw, 768px"
+          unoptimized
+          onError={() => setFailed(true)}
+          className="h-auto w-full object-contain"
+        />
+      )}
+    </span>
   );
 }
 
@@ -302,50 +315,4 @@ function escapeHtml(text: string) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
-}
-
-function resolveMarkdownImageSrc(
-  src: string,
-  bookId?: string,
-  chapterFileName?: string,
-) {
-  if (!src) {
-    return "";
-  }
-
-  if (/^(https?:|data:|blob:)/i.test(src)) {
-    return src;
-  }
-
-  if (!bookId) {
-    return src;
-  }
-
-  const rootRelativePath = src.startsWith("/")
-    ? src.slice(1)
-    : normalizeRelativePath(
-        [
-          ...(chapterFileName?.split("/").slice(0, -1) ?? []),
-          ...src.split("/"),
-        ].join("/"),
-      );
-
-  return getBookAssetUrl(bookId, rootRelativePath);
-}
-
-function normalizeRelativePath(filePath: string) {
-  const parts: string[] = [];
-
-  for (const part of filePath.split("/")) {
-    if (!part || part === ".") {
-      continue;
-    }
-    if (part === "..") {
-      parts.pop();
-      continue;
-    }
-    parts.push(part);
-  }
-
-  return parts.join("/");
 }

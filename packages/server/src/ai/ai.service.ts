@@ -18,12 +18,13 @@ import {
   SemanticSearchResult,
 } from '../content/content-index.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { decryptSecret, encryptSecret } from './secrets';
 
 const MAX_SOURCE_COUNT = 5;
 const MAX_SOURCES_PER_CHAPTER = 1;
 const MAX_CHAPTERS = 250;
 const MAX_SELECTED_TEXT = 2000;
-const MAX_MODEL_CONTEXT_CHARS = 8000;
+const MAX_MODEL_CONTEXT_CHARS = 12000;
 const STREAM_CHUNK_SIZE = 80;
 const DEFAULT_AI_CONFIG_ID = 'default';
 const CJK_STOP_CHARACTERS = new Set([
@@ -138,14 +139,14 @@ export class AiService {
         mode: config.mode,
         baseUrl: config.baseUrl?.trim() || null,
         model: config.model?.trim() || null,
-        apiKey: config.apiKey?.trim() || null,
+        apiKey: encryptSecret(config.apiKey),
       },
       create: {
         id: DEFAULT_AI_CONFIG_ID,
         mode: config.mode,
         baseUrl: config.baseUrl?.trim() || null,
         model: config.model?.trim() || null,
-        apiKey: config.apiKey?.trim() || null,
+        apiKey: encryptSecret(config.apiKey),
       },
     });
 
@@ -154,7 +155,7 @@ export class AiService {
       mode: saved.mode === 'openai-compatible' ? 'openai-compatible' : 'local',
       baseUrl: saved.baseUrl ?? undefined,
       model: saved.model ?? undefined,
-      apiKey: saved.apiKey ?? undefined,
+      apiKey: decryptSecret(saved.apiKey),
       updatedAt: saved.updatedAt,
     };
   }
@@ -649,7 +650,7 @@ export class AiService {
       chapterId: chunk.chapter.id,
       bookTitle: chunk.chapter.book.title,
       chapterTitle: chunk.chapter.title,
-      excerpt: this.trimExcerpt(chunk.text, 360),
+      excerpt: this.trimExcerpt(chunk.text, 520),
       relevance: Math.max(1, Math.round(chunk.score)),
     };
   }
@@ -721,7 +722,7 @@ export class AiService {
       mode: saved.mode === 'openai-compatible' ? 'openai-compatible' : 'local',
       baseUrl: saved.baseUrl ?? undefined,
       model: saved.model ?? undefined,
-      apiKey: saved.apiKey ?? undefined,
+      apiKey: decryptSecret(saved.apiKey),
       updatedAt: saved.updatedAt,
     } satisfies AiRuntimeConfig & { updatedAt?: Date };
   }

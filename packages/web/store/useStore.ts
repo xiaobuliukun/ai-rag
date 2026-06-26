@@ -3,6 +3,14 @@ import { persist } from 'zustand/middleware'
 import type { AiContext, AiRuntimeConfig } from '@/types'
 import type { Locale } from '@/lib/i18n'
 
+const DEFAULT_AI_PANEL_WIDTH = 384
+const MIN_AI_PANEL_WIDTH = 320
+const MAX_AI_PANEL_WIDTH = 640
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value))
+}
+
 interface AppState {
   isSidebarOpen: boolean
   toggleSidebar: () => void
@@ -11,6 +19,9 @@ interface AppState {
   
   isAIPanelOpen: boolean
   toggleAIPanel: () => void
+
+  aiPanelWidth: number
+  setAIPanelWidth: (width: number) => void
   
   fontSize: number
   setFontSize: (size: number) => void
@@ -23,6 +34,9 @@ interface AppState {
 
   pageBrightness: number
   setPageBrightness: (value: number) => void
+
+  autoBrightness: boolean
+  setAutoBrightness: (enabled: boolean) => void
 
   paperTexture: boolean
   setPaperTexture: (enabled: boolean) => void
@@ -53,6 +67,16 @@ export const useStore = create<AppState>()(
       toggleAIPanel: () =>
         set((state) => ({ isAIPanelOpen: !state.isAIPanelOpen })),
 
+      aiPanelWidth: DEFAULT_AI_PANEL_WIDTH,
+      setAIPanelWidth: (width) =>
+        set({
+          aiPanelWidth: clamp(
+            Math.round(width),
+            MIN_AI_PANEL_WIDTH,
+            MAX_AI_PANEL_WIDTH,
+          ),
+        }),
+
       fontSize: 17,
       setFontSize: (size) => set({ fontSize: size }),
 
@@ -64,6 +88,9 @@ export const useStore = create<AppState>()(
 
       pageBrightness: 100,
       setPageBrightness: (value) => set({ pageBrightness: value }),
+
+      autoBrightness: false,
+      setAutoBrightness: (enabled) => set({ autoBrightness: enabled }),
 
       paperTexture: true,
       setPaperTexture: (enabled) => set({ paperTexture: enabled }),
@@ -96,10 +123,12 @@ export const useStore = create<AppState>()(
       name: "juejin-flow-preferences",
       partialize: (state) => ({
         isSidebarOpen: state.isSidebarOpen,
+        aiPanelWidth: state.aiPanelWidth,
         fontSize: state.fontSize,
         lineHeight: state.lineHeight,
         colorTemperature: state.colorTemperature,
         pageBrightness: state.pageBrightness,
+        autoBrightness: state.autoBrightness,
         paperTexture: state.paperTexture,
         readingReminderMinutes: state.readingReminderMinutes,
         locale: state.locale,

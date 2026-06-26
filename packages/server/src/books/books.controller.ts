@@ -53,12 +53,14 @@ export class BooksController {
     @Param('chapterId') chapterId: string,
     @Body('progress', ParseFloatPipe) progress: number,
     @Body('scrollPosition') scrollPosition?: number,
+    @Body('readingSecondsDelta') readingSecondsDelta?: number,
   ) {
     return this.booksService.updateProgress(
       bookId,
       chapterId,
       progress,
       scrollPosition,
+      readingSecondsDelta,
     );
   }
 }

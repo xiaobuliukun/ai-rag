@@ -25,6 +25,7 @@ import { cn } from "@/lib/utils";
 import { MarkdownReader } from "@/components/markdown-reader";
 import { useStore } from "@/store/useStore";
 import { useI18n } from "@/lib/i18n";
+import { getEffectiveBrightnessPercent } from "@/lib/reader-preferences";
 
 const LIBRARY_REFRESH_EVENT = "library:refresh";
 
@@ -44,6 +45,9 @@ export function ChapterReader({
   const { t } = useI18n();
   const contentRef = React.useRef<HTMLDivElement>(null);
   const savedProgressRef = React.useRef(Math.round(chapter.progress ?? 0));
+  const progressRef = React.useRef(savedProgressRef.current);
+  const pendingReadingSecondsRef = React.useRef(0);
+  const lastReadingTickRef = React.useRef<number | null>(null);
   const [progress, setProgress] = React.useState(savedProgressRef.current);
   const [isSaving, setIsSaving] = React.useState(false);
   const [saveState, setSaveState] = React.useState<"idle" | "saved" | "error">(
@@ -59,21 +63,32 @@ export function ChapterReader({
   const lineHeight = useStore((state) => state.lineHeight);
   const colorTemperature = useStore((state) => state.colorTemperature);
   const pageBrightness = useStore((state) => state.pageBrightness);
+  const autoBrightness = useStore((state) => state.autoBrightness);
   const paperTexture = useStore((state) => state.paperTexture);
   const readingReminderMinutes = useStore(
     (state) => state.readingReminderMinutes,
   );
   const setReadingContext = useStore((state) => state.setReadingContext);
+  const [brightnessClock, setBrightnessClock] = React.useState(() => new Date());
+  const effectiveBrightness = React.useMemo(
+    () =>
+      getEffectiveBrightnessPercent(
+        pageBrightness,
+        autoBrightness,
+        brightnessClock,
+      ),
+    [autoBrightness, brightnessClock, pageBrightness],
+  );
   const readerStyle = React.useMemo(
     () =>
       ({
         fontSize,
         lineHeight,
         "--reader-warmth": `${colorTemperature / 100}`,
-        "--reader-brightness": `${pageBrightness / 100}`,
+        "--reader-brightness": `${effectiveBrightness / 100}`,
         "--paper-texture-opacity": paperTexture ? "0.22" : "0",
       }) as React.CSSProperties,
-    [colorTemperature, fontSize, lineHeight, pageBrightness, paperTexture],
+    [colorTemperature, effectiveBrightness, fontSize, lineHeight, paperTexture],
   );
 
   const baseReadingContext = React.useMemo(
@@ -107,6 +122,19 @@ export function ChapterReader({
   }, [loadBookmarks]);
 
   React.useEffect(() => {
+    progressRef.current = progress;
+  }, [progress]);
+
+  React.useEffect(() => {
+    if (!autoBrightness) {
+      return;
+    }
+
+    const timer = window.setInterval(() => setBrightnessClock(new Date()), 60000);
+    return () => window.clearInterval(timer);
+  }, [autoBrightness]);
+
+  React.useEffect(() => {
     const scrollPosition = chapter.readingProgress?.scrollPosition ?? 0;
     if (scrollPosition <= 0) {
       return;
@@ -136,7 +164,14 @@ export function ChapterReader({
   const persistProgress = React.useCallback(
     async (nextProgress: number) => {
       const bounded = Math.min(100, Math.max(0, Math.round(nextProgress)));
-      if (bounded === savedProgressRef.current && saveState !== "error") {
+      const readingSecondsDelta = Math.floor(pendingReadingSecondsRef.current);
+      pendingReadingSecondsRef.current -= readingSecondsDelta;
+
+      if (
+        bounded === savedProgressRef.current &&
+        readingSecondsDelta <= 0 &&
+        saveState !== "error"
+      ) {
         return;
       }
 
@@ -144,11 +179,20 @@ export function ChapterReader({
       setError(null);
 
       try {
-        await updateChapterProgress(book.id, chapter.id, bounded, window.scrollY);
+        await updateChapterProgress(
+          book.id,
+          chapter.id,
+          bounded,
+          window.scrollY,
+          readingSecondsDelta,
+        );
         savedProgressRef.current = bounded;
         setSaveState("saved");
         window.dispatchEvent(new Event(LIBRARY_REFRESH_EVENT));
       } catch (err) {
+        if (readingSecondsDelta > 0) {
+          pendingReadingSecondsRef.current += readingSecondsDelta;
+        }
         setSaveState("error");
         setError(err instanceof Error ? err.message : t("reader.saveFailed"));
       } finally {
@@ -169,6 +213,47 @@ export function ChapterReader({
 
     return () => window.clearTimeout(timer);
   }, [persistProgress, progress]);
+
+  React.useEffect(() => {
+    const readTick = () => {
+      const now = Date.now();
+      const lastTick = lastReadingTickRef.current ?? now;
+      lastReadingTickRef.current = now;
+
+      if (document.visibilityState !== "visible" || !document.hasFocus()) {
+        return;
+      }
+
+      const elapsedSeconds = Math.min(
+        30,
+        Math.max(0, Math.floor((now - lastTick) / 1000)),
+      );
+      pendingReadingSecondsRef.current += elapsedSeconds;
+    };
+
+    lastReadingTickRef.current = Date.now();
+    const tickTimer = window.setInterval(readTick, 5000);
+    const flushTimer = window.setInterval(() => {
+      readTick();
+      void persistProgress(progressRef.current);
+    }, 30000);
+    const flushOnVisibilityChange = () => {
+      readTick();
+      if (document.visibilityState === "hidden") {
+        void persistProgress(progressRef.current);
+      }
+    };
+
+    document.addEventListener("visibilitychange", flushOnVisibilityChange);
+
+    return () => {
+      readTick();
+      void persistProgress(progressRef.current);
+      window.clearInterval(tickTimer);
+      window.clearInterval(flushTimer);
+      document.removeEventListener("visibilitychange", flushOnVisibilityChange);
+    };
+  }, [persistProgress]);
 
   React.useEffect(() => {
     const updateFromScroll = () => {

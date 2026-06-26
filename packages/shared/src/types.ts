@@ -33,6 +33,7 @@ export interface ReadingProgress {
   chapterId: string;
   scrollPosition: number;
   percentage: number;
+  readingSeconds: number;
   updatedAt: string | Date;
 }
 
@@ -41,6 +42,8 @@ export interface LibraryStats {
   totalChapters: number;
   completedChapters: number;
   inProgressChapters: number;
+  readingSeconds: number;
+  readingMinutes: number;
   estimatedReadingMinutes: number;
   learningDays: number;
   completionRate: number;
@@ -65,6 +68,7 @@ export interface ScanResponse {
 export interface UpdateProgressRequest {
   progress: number;
   scrollPosition?: number;
+  readingSecondsDelta?: number;
 }
 
 export interface UpdateBookRequest {

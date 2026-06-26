@@ -66,6 +66,7 @@ model ReadingProgress {
   chapterId      String   @unique
   scrollPosition Float    @default(0)
   percentage     Float    @default(0)
+  readingSeconds Int      @default(0)
   chapter        Chapter  @relation(fields: [chapterId], references: [id], onDelete: Cascade)
   updatedAt      DateTime @updatedAt
 }

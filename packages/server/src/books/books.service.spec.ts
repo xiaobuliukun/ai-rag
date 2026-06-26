@@ -54,18 +54,25 @@ describe('BooksService', () => {
             progress: 100,
             content: 'a'.repeat(900),
             updatedAt: firstDate,
+            readingProgress: {
+              readingSeconds: 60,
+            },
           },
           {
             isRead: false,
             progress: 50,
             content: 'b'.repeat(900),
             updatedAt: secondDate,
+            readingProgress: {
+              readingSeconds: 125,
+            },
           },
           {
             isRead: false,
             progress: 0,
             content: 'c'.repeat(900),
             updatedAt: secondDate,
+            readingProgress: null,
           },
         ],
       },
@@ -76,6 +83,8 @@ describe('BooksService', () => {
       totalChapters: 3,
       completedChapters: 1,
       inProgressChapters: 1,
+      readingSeconds: 185,
+      readingMinutes: 3,
       estimatedReadingMinutes: 3,
       learningDays: 2,
       completionRate: 33.3,
@@ -93,7 +102,9 @@ describe('BooksService', () => {
       },
     });
 
-    await expect(service.findChapter('book-1', 'chapter-1')).resolves.toMatchObject({
+    await expect(
+      service.findChapter('book-1', 'chapter-1'),
+    ).resolves.toMatchObject({
       id: 'chapter-1',
       readingProgress: {
         scrollPosition: 320,
@@ -104,6 +115,41 @@ describe('BooksService', () => {
       where: { id: 'chapter-1' },
       include: {
         readingProgress: true,
+      },
+    });
+  });
+
+  it('increments bounded reading seconds when progress is updated', async () => {
+    const updatedChapter = {
+      id: 'chapter-1',
+      bookId: 'book-1',
+      progress: 100,
+      isRead: true,
+    };
+    prisma.chapter.findFirst.mockResolvedValue({ id: 'chapter-1' });
+    prisma.chapter.update.mockReturnValue(updatedChapter);
+    prisma.readingProgress.upsert.mockReturnValue({ id: 'progress-1' });
+    prisma.$transaction.mockResolvedValue([
+      updatedChapter,
+      { id: 'progress-1' },
+    ]);
+
+    await expect(
+      service.updateProgress('book-1', 'chapter-1', 120, 420, 10_000),
+    ).resolves.toBe(updatedChapter);
+
+    expect(prisma.readingProgress.upsert).toHaveBeenCalledWith({
+      where: { chapterId: 'chapter-1' },
+      update: {
+        percentage: 100,
+        scrollPosition: 420,
+        readingSeconds: { increment: 900 },
+      },
+      create: {
+        chapterId: 'chapter-1',
+        percentage: 100,
+        scrollPosition: 420,
+        readingSeconds: 900,
       },
     });
   });

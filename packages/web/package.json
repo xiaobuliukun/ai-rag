@@ -6,7 +6,8 @@
     "dev": "next dev --webpack --hostname 127.0.0.1",
     "build": "next build --webpack",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "jest --config jest.config.cjs"
   },
   "dependencies": {
     "@juejin-flow/shared": "*",

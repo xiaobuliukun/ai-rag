@@ -6,6 +6,7 @@ import {
   AlertCircle,
   Bot,
   ExternalLink,
+  GripVertical,
   Loader2,
   PanelRightClose,
   Send,
@@ -30,17 +31,35 @@ type Message = {
 };
 
 const promptKeys = ["ai.summarize", "ai.explain", "ai.quizMe"] as const;
+const MIN_PANEL_WIDTH = 320;
+const MAX_PANEL_WIDTH = 640;
+const PANEL_VIEWPORT_GUTTER = 64;
+
+function clampPanelWidth(width: number) {
+  if (typeof window === "undefined") {
+    return Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, width));
+  }
+
+  const viewportMax = Math.max(
+    MIN_PANEL_WIDTH,
+    Math.min(MAX_PANEL_WIDTH, window.innerWidth - PANEL_VIEWPORT_GUTTER),
+  );
+  return Math.min(viewportMax, Math.max(MIN_PANEL_WIDTH, width));
+}
 
 export function AIAssistantPanel() {
   const { t } = useI18n();
   const isAIPanelOpen = useStore((state) => state.isAIPanelOpen);
   const toggleAIPanel = useStore((state) => state.toggleAIPanel);
+  const aiPanelWidth = useStore((state) => state.aiPanelWidth);
+  const setAIPanelWidth = useStore((state) => state.setAIPanelWidth);
   const readingContext = useStore((state) => state.readingContext);
   const aiConfig = useStore((state) => state.aiConfig);
   const [input, setInput] = React.useState("");
   const [messages, setMessages] = React.useState<Message[]>([]);
   const [isLoading, setIsLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [isResizing, setIsResizing] = React.useState(false);
   const messagesRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
@@ -144,13 +163,60 @@ export function AIAssistantPanel() {
     void submit(input);
   };
 
+  const handleResizeStart = (event: React.PointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setIsResizing(true);
+  };
+
+  const handleResizeMove = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (!isResizing) {
+      return;
+    }
+
+    setAIPanelWidth(clampPanelWidth(window.innerWidth - event.clientX));
+  };
+
+  const handleResizeEnd = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (!isResizing) {
+      return;
+    }
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    setIsResizing(false);
+  };
+
   return (
     <aside
       className={cn(
-        "fixed right-0 top-0 z-40 flex h-screen w-96 max-w-[calc(100vw-1rem)] flex-col border-l bg-card shadow-xl transition-transform duration-300",
+        "fixed right-0 top-0 z-40 flex h-screen max-w-[calc(100vw-1rem)] flex-col border-l bg-card shadow-xl transition-transform duration-300",
         isAIPanelOpen ? "translate-x-0" : "translate-x-full",
       )}
+      style={{ width: aiPanelWidth }}
     >
+      <button
+        type="button"
+        onPointerDown={handleResizeStart}
+        onPointerMove={handleResizeMove}
+        onPointerUp={handleResizeEnd}
+        onPointerCancel={handleResizeEnd}
+        className={cn(
+          "absolute left-0 top-0 flex h-full w-4 -translate-x-1/2 cursor-ew-resize touch-none items-center justify-center text-muted-foreground/70 outline-none transition-colors hover:text-primary focus-visible:text-primary",
+          isResizing && "text-primary",
+        )}
+        aria-label={t("ai.resizePanel")}
+        role="separator"
+        aria-orientation="vertical"
+        aria-valuemin={MIN_PANEL_WIDTH}
+        aria-valuemax={MAX_PANEL_WIDTH}
+        aria-valuenow={aiPanelWidth}
+      >
+        <span className="flex h-14 w-2 items-center justify-center rounded-full bg-border/80 shadow-sm">
+          <GripVertical className="h-4 w-4" />
+        </span>
+      </button>
       <div className="flex h-14 items-center justify-between border-b px-4">
         <div className="flex min-w-0 items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary text-primary-foreground">

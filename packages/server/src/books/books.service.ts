@@ -7,6 +7,7 @@ import type { LibraryStats, UpdateBookRequest } from '@juejin-flow/shared';
 import { PrismaService } from '../prisma/prisma.service';
 
 const AVERAGE_READING_CHARS_PER_MINUTE = 450;
+const MAX_READING_SECONDS_DELTA = 15 * 60;
 
 @Injectable()
 export class BooksService {
@@ -59,6 +60,11 @@ export class BooksService {
             progress: true,
             content: true,
             updatedAt: true,
+            readingProgress: {
+              select: {
+                readingSeconds: true,
+              },
+            },
           },
         },
       },
@@ -67,7 +73,9 @@ export class BooksService {
     const totalBooks = books.length;
     const chapters = books.flatMap((book) => book.chapters);
     const totalChapters = chapters.length;
-    const completedChapters = chapters.filter((chapter) => chapter.isRead).length;
+    const completedChapters = chapters.filter(
+      (chapter) => chapter.isRead,
+    ).length;
     const inProgressChapters = chapters.filter(
       (chapter) => !chapter.isRead && chapter.progress > 0,
     ).length;
@@ -81,9 +89,16 @@ export class BooksService {
         .filter((chapter) => chapter.progress > 0 || chapter.isRead)
         .map((chapter) => chapter.updatedAt)
         .sort((left, right) => right.getTime() - left.getTime())[0] ?? null;
+    const readingSeconds = chapters.reduce(
+      (total, chapter) =>
+        total + (chapter.readingProgress?.readingSeconds ?? 0),
+      0,
+    );
+    const readingMinutes = Math.round(readingSeconds / 60);
     const estimatedReadingMinutes = Math.round(
       chapters.reduce((total, chapter) => {
-        const progressRatio = Math.min(100, Math.max(0, chapter.progress)) / 100;
+        const progressRatio =
+          Math.min(100, Math.max(0, chapter.progress)) / 100;
         const charCount = chapter.content?.trim().length ?? 0;
         return (
           total + (charCount / AVERAGE_READING_CHARS_PER_MINUTE) * progressRatio
@@ -96,6 +111,8 @@ export class BooksService {
       totalChapters,
       completedChapters,
       inProgressChapters,
+      readingSeconds,
+      readingMinutes,
       estimatedReadingMinutes,
       learningDays,
       completionRate:
@@ -205,6 +222,7 @@ export class BooksService {
     chapterId: string,
     progress: number,
     scrollPosition = 0,
+    readingSecondsDelta = 0,
   ) {
     const chapter = await this.prisma.chapter.findFirst({
       where: {
@@ -221,6 +239,10 @@ export class BooksService {
     }
 
     const boundedProgress = Math.min(100, Math.max(0, progress));
+    const boundedReadingSecondsDelta = Math.min(
+      MAX_READING_SECONDS_DELTA,
+      Math.max(0, Math.round(readingSecondsDelta)),
+    );
 
     const [updatedChapter] = await this.prisma.$transaction([
       this.prisma.chapter.update({
@@ -241,11 +263,15 @@ export class BooksService {
         update: {
           percentage: boundedProgress,
           scrollPosition,
+          ...(boundedReadingSecondsDelta > 0
+            ? { readingSeconds: { increment: boundedReadingSecondsDelta } }
+            : {}),
         },
         create: {
           chapterId,
           percentage: boundedProgress,
           scrollPosition,
+          readingSeconds: boundedReadingSecondsDelta,
         },
       }),
     ]);
