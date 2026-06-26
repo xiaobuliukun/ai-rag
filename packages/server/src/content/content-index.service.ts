@@ -1,5 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  buildLocalEmbedding,
+  cosineSimilarity,
+  parseEmbedding,
+  serializeEmbedding,
+} from './semantic';
 
 const DEFAULT_LIMIT = 50;
 const SNIPPET_RADIUS = 90;
@@ -18,6 +24,11 @@ export type ContentSearchResult = {
   highlightedExcerpt: string;
   score: number;
 };
+
+export type SemanticSearchResult = Omit<
+  ContentSearchResult,
+  'excerpt' | 'highlightedExcerpt'
+>;
 
 type ChunkFtsRow = {
   chunkId: string;
@@ -83,6 +94,8 @@ export class ContentIndexService {
         ),
       );
     }
+
+    await this.syncVectorData(bookId, chunks);
   }
 
   async search(
@@ -186,6 +199,127 @@ export class ContentIndexService {
     for (const book of books) {
       await this.syncBook(book.id);
     }
+  }
+
+  private async syncVectorData(
+    bookId: string,
+    chunks: Array<{
+      id: string;
+      content: string;
+      chapter: {
+        id: string;
+        title: string;
+        bookId: string;
+        book: {
+          title: string;
+        };
+      };
+    }>,
+  ) {
+    await this.prisma.vectorData.deleteMany({
+      where: {
+        chapter: {
+          bookId,
+        },
+      },
+    });
+
+    if (!chunks.length) {
+      return;
+    }
+
+    await this.prisma.vectorData.createMany({
+      data: chunks.map((chunk) => ({
+        chunkId: chunk.id,
+        chapterId: chunk.chapter.id,
+        content: chunk.content,
+        embedding: serializeEmbedding(
+          buildLocalEmbedding(
+            `${chunk.chapter.book.title}\n${chunk.chapter.title}\n${chunk.content}`,
+          ),
+        ),
+        metadata: JSON.stringify({
+          bookId: chunk.chapter.bookId,
+          chapterTitle: chunk.chapter.title,
+        }),
+      })),
+    });
+  }
+
+  async semanticSearch(
+    query: string,
+    options?: {
+      bookId?: string;
+      limit?: number;
+    },
+  ): Promise<SemanticSearchResult[]> {
+    const queryEmbedding = buildLocalEmbedding(query);
+    if (!query.trim() || queryEmbedding.every((value) => value === 0)) {
+      return [];
+    }
+
+    await this.ensureIndexReady();
+    await this.ensureVectorIndexReady();
+
+    const rows = await this.prisma.vectorData.findMany({
+      where: {
+        ...(options?.bookId
+          ? {
+              chapter: {
+                bookId: options.bookId,
+              },
+            }
+          : {}),
+      },
+      select: {
+        chunkId: true,
+        chapterId: true,
+        content: true,
+        embedding: true,
+        chapter: {
+          select: {
+            title: true,
+            bookId: true,
+            book: {
+              select: {
+                title: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    return rows
+      .map((row) => ({
+        chunkId: row.chunkId,
+        bookId: row.chapter.bookId,
+        chapterId: row.chapterId,
+        bookTitle: row.chapter.book.title,
+        chapterTitle: row.chapter.title,
+        content: row.content,
+        score: Math.round(
+          Math.max(
+            0,
+            cosineSimilarity(queryEmbedding, parseEmbedding(row.embedding)),
+          ) * 100,
+        ),
+      }))
+      .filter((result) => result.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, options?.limit ?? DEFAULT_LIMIT);
+  }
+
+  private async ensureVectorIndexReady() {
+    const count = await this.prisma.vectorData.count();
+    if (count > 0) {
+      return;
+    }
+
+    if (!this.syncAllPromise) {
+      this.syncAllPromise = this.syncAllBooks();
+    }
+    await this.syncAllPromise;
   }
 }
 

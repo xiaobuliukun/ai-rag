@@ -8,6 +8,7 @@ import {
   ChevronRight,
   FileText,
   Home,
+  LibraryBig,
   Search,
   Settings,
 } from "lucide-react";
@@ -93,6 +94,18 @@ export function AppSidebar() {
           >
             <Search className="w-4 h-4" />
             {t("nav.search")}
+          </Link>
+          <Link
+            href="/management"
+            className={cn(
+              "flex items-center gap-2 px-3 py-2 rounded-md hover:bg-accent/10 transition-colors",
+              pathname === "/management"
+                ? "bg-accent/20 text-accent font-medium"
+                : "text-muted-foreground",
+            )}
+          >
+            <LibraryBig className="w-4 h-4" />
+            {t("nav.management")}
           </Link>
           <Link
             href="/settings"

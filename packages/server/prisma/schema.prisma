@@ -10,26 +10,33 @@ datasource db {
 }
 
 model Book {
-  id        String    @id @default(cuid())
-  title     String
-  path      String    @unique
-  coverImage String?
-  chapters  Chapter[]
-  lastRead  DateTime  @default(now()) @updatedAt
-  createdAt DateTime  @default(now())
+  id          String     @id @default(cuid())
+  title       String
+  path        String     @unique
+  description String?
+  tags        String     @default("[]")
+  coverImage  String?
+  chapters    Chapter[]
+  bookmarks   Bookmark[]
+  lastRead    DateTime   @default(now())
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @default(now()) @updatedAt
 }
 
 model Chapter {
-  id        String   @id @default(cuid())
-  bookId    String
-  title     String
-  fileName  String
-  content   String? // Optional: store parsed content or just rely on file system
-  orderIndex Int     @default(0)
-  isRead    Boolean  @default(false)
-  progress  Float    @default(0) // 0 to 100
-  book      Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
-  chunks    ChapterChunk[]
+  id              String           @id @default(cuid())
+  bookId          String
+  title           String
+  fileName        String
+  content         String? // Optional: store parsed content or just rely on file system
+  orderIndex      Int              @default(0)
+  isRead          Boolean          @default(false)
+  progress        Float            @default(0) // 0 to 100
+  book            Book             @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  chunks          ChapterChunk[]
+  bookmarks       Bookmark[]
+  readingProgress ReadingProgress?
+  vectors         VectorData[]
   
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -39,16 +46,67 @@ model Chapter {
 }
 
 model ChapterChunk {
-  id        String   @id @default(cuid())
-  chapterId String
+  id         String      @id @default(cuid())
+  chapterId  String
   chunkIndex Int
-  content   String
-  charCount Int
-  chapter   Chapter  @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  content    String
+  charCount  Int
+  chapter    Chapter     @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  vectorData VectorData?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([chapterId, chunkIndex])
+  @@index([chapterId])
+}
+
+model ReadingProgress {
+  id             String   @id @default(cuid())
+  chapterId      String   @unique
+  scrollPosition Float    @default(0)
+  percentage     Float    @default(0)
+  chapter        Chapter  @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  updatedAt      DateTime @updatedAt
+}
+
+model Bookmark {
+  id        String   @id @default(cuid())
+  bookId    String
+  chapterId String
+  note      String
+  excerpt   String?
+  position  Int      @default(0)
+  book      Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  chapter   Chapter  @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([bookId])
+  @@index([chapterId])
+}
+
+model AiConfig {
+  id        String   @id
+  mode      String   @default("local")
+  baseUrl   String?
+  model     String?
+  apiKey    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model VectorData {
+  id        String       @id @default(cuid())
+  chunkId   String       @unique
+  chapterId String
+  content   String
+  embedding String
+  metadata  String?
+  chunk     ChapterChunk @relation(fields: [chunkId], references: [id], onDelete: Cascade)
+  chapter   Chapter      @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
   @@index([chapterId])
 }

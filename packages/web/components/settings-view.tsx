@@ -1,11 +1,22 @@
 "use client";
 
 import * as React from "react";
-import { Bot, KeyRound, Link2, Monitor, Moon, Sun, Type } from "lucide-react";
+import {
+  Bot,
+  KeyRound,
+  Link2,
+  Loader2,
+  Monitor,
+  Moon,
+  Save,
+  Sun,
+  Type,
+} from "lucide-react";
 import { useTheme } from "next-themes";
 import { cn } from "@/lib/utils";
 import { useStore } from "@/store/useStore";
 import { useI18n, type Locale } from "@/lib/i18n";
+import { getAIConfig, saveAIConfig } from "@/lib/api";
 
 const themeOptions = [
   { value: "system", labelKey: "settings.system", icon: Monitor },
@@ -33,10 +44,57 @@ export function SettingsView() {
   const setLocale = useStore((state) => state.setLocale);
   const aiConfig = useStore((state) => state.aiConfig);
   const setAIConfig = useStore((state) => state.setAIConfig);
+  const [isSavingAI, setIsSavingAI] = React.useState(false);
+  const [aiStatus, setAIStatus] = React.useState<string | null>(null);
+  const [aiError, setAIError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     setMounted(true);
   }, []);
+
+  React.useEffect(() => {
+    let isCancelled = false;
+
+    getAIConfig()
+      .then((config) => {
+        if (!isCancelled) {
+          setAIConfig({
+            mode: config.mode,
+            baseUrl: config.baseUrl,
+            model: config.model,
+            apiKey: config.apiKey,
+          });
+        }
+      })
+      .catch(() => {
+        // Keep local preferences if the server has not been migrated yet.
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [setAIConfig]);
+
+  const handleSaveAI = async () => {
+    setIsSavingAI(true);
+    setAIStatus(null);
+    setAIError(null);
+
+    try {
+      const saved = await saveAIConfig(aiConfig);
+      setAIConfig({
+        mode: saved.mode,
+        baseUrl: saved.baseUrl,
+        model: saved.model,
+        apiKey: saved.apiKey,
+      });
+      setAIStatus(t("settings.aiSaved"));
+    } catch (err) {
+      setAIError(err instanceof Error ? err.message : t("settings.aiSaveFailed"));
+    } finally {
+      setIsSavingAI(false);
+    }
+  };
 
   return (
     <div className="mx-auto max-w-4xl space-y-8">
@@ -226,6 +284,32 @@ export function SettingsView() {
             className="h-10 w-full rounded-md border bg-background px-3 text-sm outline-none transition-all focus:ring-2 focus:ring-primary/50"
           />
         </label>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={handleSaveAI}
+            disabled={isSavingAI}
+            className="inline-flex h-10 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isSavingAI ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Save className="h-4 w-4" />
+            )}
+            {t("settings.saveAI")}
+          </button>
+          {(aiStatus || aiError) && (
+            <span
+              className={cn(
+                "text-sm",
+                aiError ? "text-destructive" : "text-muted-foreground",
+              )}
+            >
+              {aiError ?? aiStatus}
+            </span>
+          )}
+        </div>
       </section>
     </div>
   );

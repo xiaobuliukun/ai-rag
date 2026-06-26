@@ -13,8 +13,8 @@ import {
   User,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
-import { AiChatResponse } from "@/types";
-import { chatWithAI } from "@/lib/api";
+import { AiChatResponse, AiSource } from "@/types";
+import { streamChatWithAI } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useStore } from "@/store/useStore";
 import { useI18n } from "@/lib/i18n";
@@ -24,6 +24,9 @@ type Message = {
   role: "user" | "assistant";
   content: string;
   response?: AiChatResponse;
+  sources?: AiSource[];
+  notice?: string;
+  isStreaming?: boolean;
 };
 
 const promptKeys = ["ai.summarize", "ai.explain", "ai.quizMe"] as const;
@@ -58,29 +61,79 @@ export function AIAssistantPanel() {
       role: "user",
       content,
     };
-    setMessages((current) => [...current, userMessage]);
+    const assistantMessageId = crypto.randomUUID();
+    const assistantMessage: Message = {
+      id: assistantMessageId,
+      role: "assistant",
+      content: "",
+      isStreaming: true,
+    };
+    setMessages((current) => [...current, userMessage, assistantMessage]);
     setInput("");
     setError(null);
     setIsLoading(true);
 
     try {
-      const response = await chatWithAI({
-        message: content,
-        context: readingContext,
-        config: aiConfig,
-      });
-
-      setMessages((current) => [
-        ...current,
+      await streamChatWithAI(
         {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: response.answer,
-          response,
+          message: content,
+          context: readingContext,
+          config: aiConfig,
         },
-      ]);
+        (event) => {
+          if (event.type === "error") {
+            throw new Error(event.message);
+          }
+
+          setMessages((current) =>
+            current.map((currentMessage) => {
+              if (currentMessage.id !== assistantMessageId) {
+                return currentMessage;
+              }
+
+              if (event.type === "meta") {
+                return {
+                  ...currentMessage,
+                  sources: event.sources,
+                };
+              }
+
+              if (event.type === "notice") {
+                return {
+                  ...currentMessage,
+                  notice: event.notice,
+                };
+              }
+
+              if (event.type === "delta") {
+                return {
+                  ...currentMessage,
+                  content: `${currentMessage.content}${event.delta}`,
+                };
+              }
+
+              return {
+                ...currentMessage,
+                content: event.response.answer,
+                response: event.response,
+                sources: event.response.sources,
+                notice: event.response.notice,
+                isStreaming: false,
+              };
+            }),
+          );
+        },
+      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("ai.requestFailed"));
+      const message = err instanceof Error ? err.message : t("ai.requestFailed");
+      setError(t("ai.requestFailedWithMessage", { message }));
+      setMessages((current) =>
+        current.map((currentMessage) =>
+          currentMessage.id === assistantMessageId
+            ? { ...currentMessage, isStreaming: false }
+            : currentMessage,
+        ),
+      );
     } finally {
       setIsLoading(false);
     }
@@ -168,15 +221,25 @@ export function AIAssistantPanel() {
                   : "border bg-background",
               )}
             >
-              <ReactMarkdown>{message.content}</ReactMarkdown>
-              {message.response?.notice && (
+              {message.content ? (
+                <ReactMarkdown>{message.content}</ReactMarkdown>
+              ) : message.isStreaming ? (
+                <span className="text-muted-foreground">{t("ai.thinking")}</span>
+              ) : null}
+              {message.isStreaming && message.content && (
+                <span className="ml-1 inline-block h-4 w-1 animate-pulse rounded-full bg-primary align-middle" />
+              )}
+              {(message.response?.notice || message.notice) && (
                 <div className="mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-2 py-1 text-xs text-destructive">
-                  {message.response.notice}
+                  {message.response?.notice ?? message.notice}
                 </div>
               )}
-              {message.response?.sources.length ? (
+              {(message.response?.sources.length || message.sources?.length) ? (
                 <div className="mt-3 space-y-2 border-t pt-3">
-                  {message.response.sources.map((source, index) => (
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    {t("ai.sources")}
+                  </div>
+                  {(message.response?.sources ?? message.sources ?? []).map((source, index) => (
                     <Link
                       key={source.id}
                       href={`/book/${source.bookId}/${source.chapterId}`}
@@ -191,6 +254,9 @@ export function AIAssistantPanel() {
                       <div className="mt-0.5 line-clamp-2 text-muted-foreground">
                         {source.bookTitle}
                       </div>
+                      <div className="mt-1 line-clamp-3 text-muted-foreground/90">
+                        {source.excerpt}
+                      </div>
                     </Link>
                   ))}
                 </div>
@@ -204,7 +270,7 @@ export function AIAssistantPanel() {
           </div>
         ))}
 
-        {isLoading && (
+        {isLoading && !messages.some((message) => message.isStreaming) && (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
             {t("ai.thinking")}

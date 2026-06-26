@@ -1,11 +1,13 @@
 import {
+  Body,
   Controller,
+  Delete,
   Get,
   Param,
-  Put,
-  Body,
   ParseFloatPipe,
+  Put,
 } from '@nestjs/common';
+import type { UpdateBookRequest } from '@juejin-flow/shared';
 import { BooksService } from './books.service';
 
 @Controller('books')
@@ -22,6 +24,16 @@ export class BooksController {
     return this.booksService.findOne(id);
   }
 
+  @Put(':id')
+  updateBook(@Param('id') id: string, @Body() request: UpdateBookRequest) {
+    return this.booksService.updateBook(id, request);
+  }
+
+  @Delete(':id')
+  deleteBook(@Param('id') id: string) {
+    return this.booksService.deleteBook(id);
+  }
+
   @Get(':bookId/chapters/:chapterId')
   findChapter(
     @Param('bookId') bookId: string,
@@ -35,7 +47,13 @@ export class BooksController {
     @Param('bookId') bookId: string,
     @Param('chapterId') chapterId: string,
     @Body('progress', ParseFloatPipe) progress: number,
+    @Body('scrollPosition') scrollPosition?: number,
   ) {
-    return this.booksService.updateProgress(bookId, chapterId, progress);
+    return this.booksService.updateProgress(
+      bookId,
+      chapterId,
+      progress,
+      scrollPosition,
+    );
   }
 }

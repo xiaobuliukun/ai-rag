@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { Book as BookIcon, Clock } from "lucide-react";
 import { Book } from "@/types";
+import { getBookAssetUrl } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
 interface BookCardProps {
@@ -19,15 +20,16 @@ export function BookCard({ book }: BookCardProps) {
     0;
   const progress =
     totalChapters > 0 ? Math.round((readChapters / totalChapters) * 100) : 0;
+  const coverImage = resolveCoverImage(book);
 
   return (
     <Link href={`/book/${book.id}`} className="block group">
       <div className="bg-card border rounded-lg overflow-hidden shadow-sm hover:shadow-md transition-all hover:-translate-y-1">
         {/* Cover Image Placeholder */}
         <div className="aspect-[3/4] bg-muted flex items-center justify-center relative group-hover:bg-muted/80 transition-colors">
-          {book.coverImage ? (
+          {coverImage ? (
             <Image
-              src={book.coverImage}
+              src={coverImage}
               alt={book.title}
               fill
               sizes="(max-width: 768px) 50vw, (max-width: 1200px) 25vw, 220px"
@@ -74,4 +76,16 @@ export function BookCard({ book }: BookCardProps) {
       </div>
     </Link>
   );
+}
+
+function resolveCoverImage(book: Book) {
+  if (!book.coverImage) {
+    return "";
+  }
+
+  if (/^(https?:|data:|blob:|\/)/i.test(book.coverImage)) {
+    return book.coverImage;
+  }
+
+  return getBookAssetUrl(book.id, book.coverImage);
 }

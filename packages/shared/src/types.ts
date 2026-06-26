@@ -2,9 +2,12 @@ export interface Book {
   id: string;
   title: string;
   path: string;
+  description?: string | null;
+  tags?: string[];
   lastRead: string | Date;
   createdAt?: string | Date;
-  coverImage?: string;
+  updatedAt?: string | Date;
+  coverImage?: string | null;
   chapters?: Chapter[];
   totalChapters?: number;
   readChapters?: number;
@@ -15,7 +18,7 @@ export interface Chapter {
   bookId: string;
   title: string;
   fileName: string;
-  content?: string;
+  content?: string | null;
   orderIndex: number;
   isRead: boolean;
   progress: number;
@@ -41,6 +44,41 @@ export interface ScanResponse {
 
 export interface UpdateProgressRequest {
   progress: number;
+  scrollPosition?: number;
+}
+
+export interface UpdateBookRequest {
+  title?: string;
+  description?: string | null;
+  tags?: string[];
+  coverImage?: string | null;
+}
+
+export interface Bookmark {
+  id: string;
+  bookId: string;
+  chapterId: string;
+  note: string;
+  excerpt?: string | null;
+  position: number;
+  createdAt: string | Date;
+  updatedAt?: string | Date;
+  bookTitle?: string;
+  chapterTitle?: string;
+}
+
+export interface CreateBookmarkRequest {
+  bookId: string;
+  chapterId: string;
+  note: string;
+  excerpt?: string;
+  position?: number;
+}
+
+export interface UpdateBookmarkRequest {
+  note?: string;
+  excerpt?: string | null;
+  position?: number;
 }
 
 export type SearchResultType = 'all' | 'book' | 'chapter' | 'content';
@@ -62,6 +100,11 @@ export interface AiRuntimeConfig {
   baseUrl?: string;
   model?: string;
   apiKey?: string;
+}
+
+export interface PersistedAiConfig extends AiRuntimeConfig {
+  id: string;
+  updatedAt?: string | Date;
 }
 
 export interface AiContext {
@@ -94,4 +137,56 @@ export interface AiChatResponse {
   mode: 'local-extractive' | 'openai-compatible';
   model?: string;
   notice?: string;
+}
+
+export type AiChatStreamEvent =
+  | {
+      type: 'meta';
+      sources: AiSource[];
+      mode: AiChatResponse['mode'];
+      model?: string;
+    }
+  | {
+      type: 'delta';
+      delta: string;
+    }
+  | {
+      type: 'notice';
+      notice: string;
+    }
+  | {
+      type: 'done';
+      response: AiChatResponse;
+    }
+  | {
+      type: 'error';
+      message: string;
+    };
+
+export interface BackupPayload {
+  version: 1;
+  exportedAt: string;
+  books: Array<
+    Book & {
+      chapters: Array<
+        Chapter & {
+          chunks?: Array<{
+            chunkIndex: number;
+            content: string;
+            charCount: number;
+          }>;
+        }
+      >;
+    }
+  >;
+  bookmarks: Bookmark[];
+  aiConfig?: PersistedAiConfig | null;
+}
+
+export interface ImportBackupResponse {
+  success: boolean;
+  message: string;
+  booksImported: number;
+  chaptersImported: number;
+  bookmarksImported: number;
 }

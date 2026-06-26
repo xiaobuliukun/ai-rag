@@ -12,6 +12,7 @@ describe('AiService', () => {
   };
   const contentIndex = {
     search: jest.fn(),
+    semanticSearch: jest.fn(),
   };
 
   let service: AiService;
@@ -19,6 +20,7 @@ describe('AiService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     contentIndex.search.mockResolvedValue([]);
+    contentIndex.semanticSearch.mockResolvedValue([]);
     service = new AiService(prisma as never, contentIndex as never);
   });
 
@@ -122,7 +124,15 @@ describe('AiService', () => {
     });
 
     expect(contentIndex.search).toHaveBeenCalledWith(
-      expect.stringContaining('React hooks'),
+      expect.stringContaining('react hooks'),
+      expect.objectContaining({
+        bookId: 'book-1',
+        limit: 250,
+        mode: 'and',
+      }),
+    );
+    expect(contentIndex.search).toHaveBeenCalledWith(
+      expect.stringContaining('react hooks'),
       expect.objectContaining({
         bookId: 'book-1',
         limit: 250,
@@ -136,6 +146,79 @@ describe('AiService', () => {
       chapterId: 'chapter-1',
       bookTitle: 'React Patterns',
       chapterTitle: 'Hooks',
+    });
+  });
+
+  it('filters noisy Chinese question characters from indexed retrieval', async () => {
+    prisma.chapterChunk.findMany.mockResolvedValue([]);
+    prisma.chapter.findMany.mockResolvedValue([]);
+    contentIndex.search.mockResolvedValue([
+      {
+        chunkId: 'chunk-1',
+        bookId: 'book-1',
+        chapterId: 'chapter-1',
+        bookTitle: 'React Patterns',
+        chapterTitle: 'Hooks 原理',
+        content: 'React hooks are implemented through a linked list.',
+        excerpt: 'React hooks are implemented through a linked list.',
+        highlightedExcerpt:
+          'React hooks are implemented through a linked list.',
+        score: 30,
+      },
+    ]);
+
+    await service.chat({
+      message: 'React Hooks 的核心原理是什么？',
+      context: { bookId: 'book-1' },
+      config: { mode: 'local' },
+    });
+
+    expect(contentIndex.search).toHaveBeenNthCalledWith(
+      1,
+      'react hooks',
+      expect.objectContaining({ mode: 'and' }),
+    );
+  });
+
+  it('streams local answers with sources and a final response', async () => {
+    prisma.chapterChunk.findMany.mockResolvedValue([]);
+    prisma.chapter.findMany.mockResolvedValue([]);
+    contentIndex.search.mockResolvedValue([
+      {
+        chunkId: 'chunk-1',
+        bookId: 'book-1',
+        chapterId: 'chapter-1',
+        bookTitle: 'React Patterns',
+        chapterTitle: 'Hooks',
+        content: 'React hooks let components share stateful logic.',
+        excerpt: 'React hooks let components share stateful logic.',
+        highlightedExcerpt:
+          '<mark>React</mark> hooks let components share stateful logic.',
+        score: 30,
+      },
+    ]);
+
+    const events = [];
+    for await (const event of service.streamChat({
+      message: 'React hooks',
+      context: { bookId: 'book-1' },
+      config: { mode: 'local' },
+    })) {
+      events.push(event);
+    }
+
+    expect(events[0]).toMatchObject({
+      type: 'meta',
+      sources: [expect.objectContaining({ chapterTitle: 'Hooks' })],
+      mode: 'local-extractive',
+    });
+    expect(events.some((event) => event.type === 'delta')).toBe(true);
+    expect(events.at(-1)).toMatchObject({
+      type: 'done',
+      response: {
+        mode: 'local-extractive',
+        sources: [expect.objectContaining({ chapterTitle: 'Hooks' })],
+      },
     });
   });
 });

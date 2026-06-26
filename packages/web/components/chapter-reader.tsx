@@ -7,11 +7,18 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  BookmarkPlus,
+  Trash2,
   Loader2,
   Save,
 } from "lucide-react";
-import { Book, Chapter } from "@/types";
-import { updateChapterProgress } from "@/lib/api";
+import { Book, Bookmark, Chapter } from "@/types";
+import {
+  createBookmark,
+  deleteBookmark,
+  getBookmarks,
+  updateChapterProgress,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { MarkdownReader } from "@/components/markdown-reader";
 import { useStore } from "@/store/useStore";
@@ -40,6 +47,10 @@ export function ChapterReader({
   const [saveState, setSaveState] = React.useState<"idle" | "saved" | "error">(
     "idle",
   );
+  const [bookmarks, setBookmarks] = React.useState<Bookmark[]>([]);
+  const [bookmarkNote, setBookmarkNote] = React.useState("");
+  const [selectedText, setSelectedText] = React.useState("");
+  const [isBookmarking, setIsBookmarking] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const fontSize = useStore((state) => state.fontSize);
   const lineHeight = useStore((state) => state.lineHeight);
@@ -63,6 +74,18 @@ export function ChapterReader({
     };
   }, [baseReadingContext, setReadingContext]);
 
+  const loadBookmarks = React.useCallback(async () => {
+    try {
+      setBookmarks(await getBookmarks(book.id, chapter.id));
+    } catch {
+      setBookmarks([]);
+    }
+  }, [book.id, chapter.id]);
+
+  React.useEffect(() => {
+    void loadBookmarks();
+  }, [loadBookmarks]);
+
   const persistProgress = React.useCallback(
     async (nextProgress: number) => {
       const bounded = Math.min(100, Math.max(0, Math.round(nextProgress)));
@@ -74,7 +97,7 @@ export function ChapterReader({
       setError(null);
 
       try {
-        await updateChapterProgress(book.id, chapter.id, bounded);
+        await updateChapterProgress(book.id, chapter.id, bounded, window.scrollY);
         savedProgressRef.current = bounded;
         setSaveState("saved");
         window.dispatchEvent(new Event(LIBRARY_REFRESH_EVENT));
@@ -135,15 +158,53 @@ export function ChapterReader({
   };
 
   const handleTextSelection = () => {
-    const selectedText = window.getSelection()?.toString().trim();
-    if (!selectedText) {
+    const nextSelectedText = window.getSelection()?.toString().trim();
+    if (!nextSelectedText) {
       return;
     }
 
+    setSelectedText(nextSelectedText.slice(0, 2000));
     setReadingContext({
       ...baseReadingContext,
-      selectedText: selectedText.slice(0, 2000),
+      selectedText: nextSelectedText.slice(0, 2000),
     });
+  };
+
+  const handleCreateBookmark = async () => {
+    const note = bookmarkNote.trim() || selectedText.slice(0, 120);
+    if (!note) {
+      return;
+    }
+
+    setIsBookmarking(true);
+    setError(null);
+
+    try {
+      await createBookmark({
+        bookId: book.id,
+        chapterId: chapter.id,
+        note,
+        excerpt: selectedText,
+        position: progress,
+      });
+      setBookmarkNote("");
+      await loadBookmarks();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("reader.bookmarkFailed"));
+    } finally {
+      setIsBookmarking(false);
+    }
+  };
+
+  const handleDeleteBookmark = async (bookmarkId: string) => {
+    setError(null);
+
+    try {
+      await deleteBookmark(bookmarkId);
+      await loadBookmarks();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("reader.bookmarkFailed"));
+    }
   };
 
   return (
@@ -216,6 +277,76 @@ export function ChapterReader({
                 {error ?? t("reader.progressSaved")}
               </div>
             )}
+
+            <div className="mt-5 border-t pt-4">
+              <div className="flex flex-col gap-3 md:flex-row">
+                <textarea
+                  value={bookmarkNote}
+                  onChange={(event) => setBookmarkNote(event.target.value)}
+                  rows={2}
+                  placeholder={
+                    selectedText
+                      ? t("reader.bookmarkPlaceholderWithSelection")
+                      : t("reader.bookmarkPlaceholder")
+                  }
+                  className="min-h-20 flex-1 resize-none rounded-md border bg-background px-3 py-2 text-sm outline-none transition-all focus:ring-2 focus:ring-primary/50"
+                />
+                <button
+                  type="button"
+                  onClick={handleCreateBookmark}
+                  disabled={isBookmarking || (!bookmarkNote.trim() && !selectedText)}
+                  className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-md border bg-background px-3 text-sm font-medium transition-colors hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isBookmarking ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <BookmarkPlus className="h-4 w-4" />
+                  )}
+                  {t("reader.addBookmark")}
+                </button>
+              </div>
+
+              {selectedText && (
+                <div className="mt-2 line-clamp-2 rounded-md bg-secondary/60 px-3 py-2 text-xs text-muted-foreground">
+                  {selectedText}
+                </div>
+              )}
+
+              {bookmarks.length > 0 && (
+                <div className="mt-4 space-y-2">
+                  {bookmarks.map((bookmark) => (
+                    <div
+                      key={bookmark.id}
+                      className="rounded-md border bg-background px-3 py-2 text-sm"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="font-medium">{bookmark.note}</div>
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            {t("reader.bookmarkPosition", {
+                              position: bookmark.position,
+                            })}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void handleDeleteBookmark(bookmark.id)}
+                          className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                          aria-label={t("reader.deleteBookmark")}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                      {bookmark.excerpt && (
+                        <div className="mt-2 line-clamp-3 text-xs leading-5 text-muted-foreground">
+                          {bookmark.excerpt}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -228,6 +359,8 @@ export function ChapterReader({
           {chapter.content ? (
             <MarkdownReader
               content={chapter.content}
+              bookId={book.id}
+              chapterFileName={chapter.fileName}
               style={{ fontSize, lineHeight }}
             />
           ) : (

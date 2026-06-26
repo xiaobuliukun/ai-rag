@@ -1,11 +1,20 @@
 import {
   AiChatRequest,
   AiChatResponse,
+  AiChatStreamEvent,
+  AiRuntimeConfig,
   Book,
+  Bookmark,
+  BackupPayload,
   Chapter,
+  CreateBookmarkRequest,
+  ImportBackupResponse,
+  PersistedAiConfig,
   ScanResponse,
   SearchResult,
   SearchResultType,
+  UpdateBookRequest,
+  UpdateBookmarkRequest,
 } from "@/types";
 
 export const API_BASE_URL =
@@ -75,10 +84,24 @@ export function updateChapterProgress(
   bookId: string,
   chapterId: string,
   progress: number,
+  scrollPosition = 0,
 ) {
   return fetchJson<Chapter>(`/books/${bookId}/chapters/${chapterId}/progress`, {
     method: "PUT",
-    body: JSON.stringify({ progress }),
+    body: JSON.stringify({ progress, scrollPosition }),
+  });
+}
+
+export function updateBook(bookId: string, request: UpdateBookRequest) {
+  return fetchJson<Book>(`/books/${bookId}`, {
+    method: "PUT",
+    body: JSON.stringify(request),
+  });
+}
+
+export function deleteBook(bookId: string) {
+  return fetchJson<{ success: boolean }>(`/books/${bookId}`, {
+    method: "DELETE",
   });
 }
 
@@ -112,4 +135,133 @@ export function chatWithAI(request: AiChatRequest) {
     method: "POST",
     body: JSON.stringify(request),
   });
+}
+
+export function getAIConfig() {
+  return fetchJson<PersistedAiConfig>("/ai/config", { cache: "no-store" });
+}
+
+export function saveAIConfig(config: AiRuntimeConfig) {
+  return fetchJson<PersistedAiConfig>("/ai/config", {
+    method: "PUT",
+    body: JSON.stringify(config),
+  });
+}
+
+export function getBookmarks(bookId?: string, chapterId?: string) {
+  const params = new URLSearchParams();
+  if (bookId) {
+    params.set("bookId", bookId);
+  }
+  if (chapterId) {
+    params.set("chapterId", chapterId);
+  }
+
+  const query = params.toString();
+  return fetchJson<Bookmark[]>(`/bookmarks${query ? `?${query}` : ""}`, {
+    cache: "no-store",
+  });
+}
+
+export function createBookmark(request: CreateBookmarkRequest) {
+  return fetchJson<Bookmark>("/bookmarks", {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
+export function updateBookmark(id: string, request: UpdateBookmarkRequest) {
+  return fetchJson<Bookmark>(`/bookmarks/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(request),
+  });
+}
+
+export function deleteBookmark(id: string) {
+  return fetchJson<{ success: boolean }>(`/bookmarks/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export function exportBackup() {
+  return fetchJson<BackupPayload>("/backup/export", { cache: "no-store" });
+}
+
+export function importBackup(payload: BackupPayload) {
+  return fetchJson<ImportBackupResponse>("/backup/import", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getBookAssetUrl(bookId: string, filePath: string) {
+  const params = new URLSearchParams({ path: filePath });
+  return `${API_BASE_URL}/assets/books/${bookId}/files?${params.toString()}`;
+}
+
+export async function streamChatWithAI(
+  request: AiChatRequest,
+  onEvent: (event: AiChatStreamEvent) => void,
+) {
+  const response = await fetch(`${API_BASE_URL}/ai/chat/stream`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    throw new ApiError(await readErrorMessage(response), response.status);
+  }
+
+  if (!response.body) {
+    throw new Error("AI stream response did not include a body");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split("\n\n");
+      buffer = events.pop() ?? "";
+
+      for (const event of events) {
+        const parsed = parseSseEvent(event);
+        if (parsed) {
+          onEvent(parsed);
+        }
+      }
+    }
+
+    buffer += decoder.decode();
+    const parsed = parseSseEvent(buffer);
+    if (parsed) {
+      onEvent(parsed);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function parseSseEvent(event: string) {
+  const data = event
+    .split("\n")
+    .find((line) => line.startsWith("data:"))
+    ?.slice(5)
+    .trim();
+
+  if (!data) {
+    return null;
+  }
+
+  return JSON.parse(data) as AiChatStreamEvent;
 }
