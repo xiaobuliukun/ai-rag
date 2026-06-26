@@ -107,6 +107,8 @@ export const useStore = create<AppState>()(
         baseUrl: "https://api.openai.com/v1",
         model: "gpt-4o-mini",
         apiKey: "",
+        embeddingProvider: "local",
+        embeddingModel: "text-embedding-3-small",
         ragSourceCount: 5,
         ragContextChars: 12000,
         ragExcerptChars: 520,

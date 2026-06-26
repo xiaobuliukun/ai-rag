@@ -106,6 +106,7 @@ export interface UpdateBookmarkRequest {
 }
 
 export type SearchResultType = 'all' | 'book' | 'chapter' | 'content';
+export type AiEmbeddingProvider = 'local' | 'openai-compatible';
 
 export interface SearchResult {
   id: string;
@@ -124,6 +125,8 @@ export interface AiRuntimeConfig {
   baseUrl?: string;
   model?: string;
   apiKey?: string;
+  embeddingProvider?: AiEmbeddingProvider;
+  embeddingModel?: string;
   ragSourceCount?: number;
   ragContextChars?: number;
   ragExcerptChars?: number;

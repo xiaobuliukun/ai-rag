@@ -93,6 +93,8 @@ model AiConfig {
   baseUrl         String?
   model           String?
   apiKey          String?
+  embeddingProvider String @default("local")
+  embeddingModel    String?
   ragSourceCount  Int      @default(5)
   ragContextChars Int      @default(12000)
   ragExcerptChars Int      @default(520)

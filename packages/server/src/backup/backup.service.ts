@@ -75,6 +75,11 @@ export class BackupService {
             baseUrl: aiConfig.baseUrl ?? undefined,
             model: aiConfig.model ?? undefined,
             apiKey: undefined,
+            embeddingProvider:
+              aiConfig.embeddingProvider === 'openai-compatible'
+                ? 'openai-compatible'
+                : 'local',
+            embeddingModel: aiConfig.embeddingModel ?? undefined,
             ragSourceCount: aiConfig.ragSourceCount,
             ragContextChars: aiConfig.ragContextChars,
             ragExcerptChars: aiConfig.ragExcerptChars,
@@ -178,6 +183,11 @@ export class BackupService {
             baseUrl: payload.aiConfig.baseUrl ?? null,
             model: payload.aiConfig.model ?? null,
             apiKey: encryptSecret(payload.aiConfig.apiKey),
+            embeddingProvider:
+              payload.aiConfig.embeddingProvider === 'openai-compatible'
+                ? 'openai-compatible'
+                : 'local',
+            embeddingModel: payload.aiConfig.embeddingModel ?? null,
             ragSourceCount: payload.aiConfig.ragSourceCount ?? 5,
             ragContextChars: payload.aiConfig.ragContextChars ?? 12000,
             ragExcerptChars: payload.aiConfig.ragExcerptChars ?? 520,

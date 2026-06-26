@@ -31,6 +31,12 @@ npm exec -w packages/server prisma migrate dev
 npm exec -w packages/server prisma migrate deploy
 ```
 
+复制示例环境变量：
+
+```bash
+cp packages/server/.env.example packages/server/.env
+```
+
 ## Main API
 
 - `GET /api/books`
@@ -48,4 +54,4 @@ npm exec -w packages/server prisma migrate deploy
 - `GET /api/assets/books/:bookId/files`
 
 AI 默认使用本地抽取式回答；配置 OpenAI-compatible `baseUrl`、`model`、`apiKey` 后，会调用兼容 `/chat/completions` 的模型接口。
-建议设置 `AI_CONFIG_SECRET` 用于本地加密保存 API Key；未设置时会使用本地 fallback secret。RAG 可配置引用数量、模型上下文字数和单条摘录长度。
+建议设置 `AI_CONFIG_SECRET` 用于本地加密保存 API Key；未设置时会使用本地 fallback secret。RAG 可配置引用数量、模型上下文字数、单条摘录长度和 embedding provider。Embedding 默认使用本地 hash 向量；配置 `AI_EMBEDDING_PROVIDER=openai-compatible` 与 embedding API key 后，会调用兼容 `/embeddings` 的接口，并在向量配置变化时自动重建本地向量索引。

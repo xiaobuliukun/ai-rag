@@ -1,5 +1,16 @@
 import type { NextConfig } from "next";
 
+function extraImagePatterns() {
+  return (process.env.NEXT_PUBLIC_IMAGE_HOSTS ?? "")
+    .split(",")
+    .map((hostname) => hostname.trim())
+    .filter(Boolean)
+    .map((hostname) => ({
+      protocol: "https" as const,
+      hostname,
+    }));
+}
+
 const nextConfig: NextConfig = {
   transpilePackages: ["@juejin-flow/shared"],
   images: {
@@ -86,7 +97,19 @@ const nextConfig: NextConfig = {
       },
       {
         protocol: "https",
+        hostname: "raw.githubusercontent.com",
+      },
+      {
+        protocol: "https",
+        hostname: "user-images.githubusercontent.com",
+      },
+      {
+        protocol: "https",
         hostname: "img.shields.io",
+      },
+      {
+        protocol: "https",
+        hostname: "images.unsplash.com",
       },
       {
         protocol: "https",
@@ -112,6 +135,7 @@ const nextConfig: NextConfig = {
         port: "3001",
         pathname: "/api/assets/**",
       },
+      ...extraImagePatterns(),
     ],
   },
 };

@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { decryptSecret } from '../ai/secrets';
 import {
   buildLocalEmbedding,
   cosineSimilarity,
@@ -41,6 +42,22 @@ type ChunkFtsRow = {
 
 type CountRow = {
   count: number | bigint;
+};
+
+type EmbeddingProvider = 'local' | 'openai-compatible';
+
+type EmbeddingConfig = {
+  provider: EmbeddingProvider;
+  model: string;
+  baseUrl?: string;
+  apiKey?: string;
+};
+
+type EmbeddingResponse = {
+  data?: Array<{
+    index?: number;
+    embedding?: unknown;
+  }>;
 };
 
 @Injectable()
@@ -182,11 +199,18 @@ export class ContentIndexService {
       return;
     }
 
-    if (!this.syncAllPromise) {
-      this.syncAllPromise = this.syncAllBooks();
-    }
-    await this.syncAllPromise;
+    await this.runSyncAllBooks();
     this.indexReadyChecked = true;
+  }
+
+  private async runSyncAllBooks() {
+    if (!this.syncAllPromise) {
+      this.syncAllPromise = this.syncAllBooks().finally(() => {
+        this.syncAllPromise = undefined;
+      });
+    }
+
+    await this.syncAllPromise;
   }
 
   private async syncAllBooks() {
@@ -228,19 +252,30 @@ export class ContentIndexService {
       return;
     }
 
+    const embeddingConfig = await this.resolveEmbeddingConfig();
+    const embeddingTexts = chunks.map(
+      (chunk) =>
+        `${chunk.chapter.book.title}\n${chunk.chapter.title}\n${chunk.content}`,
+    );
+    const embeddingResult = await this.buildEmbeddings(
+      embeddingTexts,
+      embeddingConfig,
+    );
+
     await this.prisma.vectorData.createMany({
-      data: chunks.map((chunk) => ({
+      data: chunks.map((chunk, index) => ({
         chunkId: chunk.id,
         chapterId: chunk.chapter.id,
         content: chunk.content,
         embedding: serializeEmbedding(
-          buildLocalEmbedding(
-            `${chunk.chapter.book.title}\n${chunk.chapter.title}\n${chunk.content}`,
-          ),
+          embeddingResult.vectors[index] ??
+            buildLocalEmbedding(embeddingTexts[index] ?? ''),
         ),
         metadata: JSON.stringify({
           bookId: chunk.chapter.bookId,
           chapterTitle: chunk.chapter.title,
+          embeddingProvider: embeddingResult.config.provider,
+          embeddingModel: embeddingResult.config.model,
         }),
       })),
     });
@@ -253,13 +288,14 @@ export class ContentIndexService {
       limit?: number;
     },
   ): Promise<SemanticSearchResult[]> {
-    const queryEmbedding = buildLocalEmbedding(query);
+    const embeddingConfig = await this.resolveEmbeddingConfig();
+    const queryEmbedding = await this.buildEmbedding(query, embeddingConfig);
     if (!query.trim() || queryEmbedding.every((value) => value === 0)) {
       return [];
     }
 
     await this.ensureIndexReady();
-    await this.ensureVectorIndexReady();
+    await this.ensureVectorIndexReady(embeddingConfig);
 
     const rows = await this.prisma.vectorData.findMany({
       where: {
@@ -310,16 +346,164 @@ export class ContentIndexService {
       .slice(0, options?.limit ?? DEFAULT_LIMIT);
   }
 
-  private async ensureVectorIndexReady() {
+  private async ensureVectorIndexReady(embeddingConfig: EmbeddingConfig) {
     const count = await this.prisma.vectorData.count();
-    if (count > 0) {
+    if (count > 0 && (await this.isVectorIndexCurrent(embeddingConfig))) {
       return;
     }
 
-    if (!this.syncAllPromise) {
-      this.syncAllPromise = this.syncAllBooks();
+    await this.runSyncAllBooks();
+  }
+
+  private async isVectorIndexCurrent(embeddingConfig: EmbeddingConfig) {
+    const existing = await this.prisma.vectorData.findFirst({
+      select: {
+        metadata: true,
+      },
+    });
+    const metadata = parseVectorMetadata(existing?.metadata);
+
+    return (
+      metadata.embeddingProvider === embeddingConfig.provider &&
+      metadata.embeddingModel === embeddingConfig.model
+    );
+  }
+
+  private async resolveEmbeddingConfig(): Promise<EmbeddingConfig> {
+    const saved = await this.prisma.aiConfig
+      .findUnique({
+        where: { id: 'default' },
+      })
+      .catch(() => null);
+    const provider =
+      saved?.embeddingProvider === 'openai-compatible' ||
+      process.env.AI_EMBEDDING_PROVIDER === 'openai-compatible'
+        ? 'openai-compatible'
+        : 'local';
+    const baseUrl =
+      process.env.AI_EMBEDDING_BASE_URL ||
+      saved?.baseUrl ||
+      process.env.AI_BASE_URL ||
+      process.env.OPENAI_BASE_URL ||
+      'https://api.openai.com/v1';
+    const apiKey =
+      process.env.AI_EMBEDDING_API_KEY ||
+      decryptSecret(saved?.apiKey) ||
+      process.env.AI_API_KEY ||
+      process.env.OPENAI_API_KEY ||
+      '';
+    const model =
+      process.env.AI_EMBEDDING_MODEL ||
+      saved?.embeddingModel ||
+      (provider === 'openai-compatible'
+        ? 'text-embedding-3-small'
+        : 'local-hash-v1');
+
+    if (provider !== 'openai-compatible' || !apiKey) {
+      return {
+        provider: 'local',
+        model: 'local-hash-v1',
+      };
     }
-    await this.syncAllPromise;
+
+    return {
+      provider,
+      model,
+      baseUrl,
+      apiKey,
+    };
+  }
+
+  private async buildEmbeddings(texts: string[], config: EmbeddingConfig) {
+    if (config.provider === 'local') {
+      return {
+        vectors: texts.map((text) => buildLocalEmbedding(text)),
+        config,
+      };
+    }
+
+    try {
+      const response = await fetch(
+        `${config.baseUrl?.replace(/\/$/, '')}/embeddings`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${config.apiKey}`,
+          },
+          body: JSON.stringify({
+            model: config.model,
+            input: texts,
+          }),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(
+          `Embedding request failed with status ${response.status}`,
+        );
+      }
+
+      const payload = (await response.json()) as EmbeddingResponse;
+      return {
+        vectors: texts.map((text, index) =>
+          this.normalizeRemoteEmbedding(
+            payload.data?.find((item) => item.index === index)?.embedding,
+            text,
+          ),
+        ),
+        config,
+      };
+    } catch {
+      return {
+        vectors: texts.map((text) => buildLocalEmbedding(text)),
+        config: {
+          provider: 'local',
+          model: 'local-hash-v1',
+        } satisfies EmbeddingConfig,
+      };
+    }
+  }
+
+  private async buildEmbedding(text: string, config: EmbeddingConfig) {
+    if (config.provider === 'local') {
+      return buildLocalEmbedding(text);
+    }
+
+    try {
+      const response = await fetch(
+        `${config.baseUrl?.replace(/\/$/, '')}/embeddings`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${config.apiKey}`,
+          },
+          body: JSON.stringify({
+            model: config.model,
+            input: text,
+          }),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(
+          `Embedding request failed with status ${response.status}`,
+        );
+      }
+
+      const payload = (await response.json()) as EmbeddingResponse;
+      return this.normalizeRemoteEmbedding(payload.data?.[0]?.embedding, text);
+    } catch {
+      return buildLocalEmbedding(text);
+    }
+  }
+
+  private normalizeRemoteEmbedding(value: unknown, fallbackText: string) {
+    return Array.isArray(value) &&
+      value.every((item) => typeof item === 'number')
+      ? value
+      : buildLocalEmbedding(fallbackText);
   }
 }
 
@@ -381,6 +565,35 @@ export function createHighlightedSnippet(content: string, query: string) {
     text,
     html: highlightHtml(text, terms),
   };
+}
+
+export function parseVectorMetadata(value?: string | null) {
+  if (!value) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === 'object'
+      ? {
+          embeddingProvider:
+            (parsed as Record<string, unknown>).embeddingProvider ===
+            'openai-compatible'
+              ? 'openai-compatible'
+              : (parsed as Record<string, unknown>).embeddingProvider ===
+                  'local'
+                ? 'local'
+                : undefined,
+          embeddingModel:
+            typeof (parsed as Record<string, unknown>).embeddingModel ===
+            'string'
+              ? ((parsed as Record<string, unknown>).embeddingModel as string)
+              : undefined,
+        }
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 function extractHighlightTerms(query: string) {

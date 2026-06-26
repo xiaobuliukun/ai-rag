@@ -2,6 +2,7 @@ import {
   buildFtsQuery,
   createHighlightedSnippet,
   normalizeSearchText,
+  parseVectorMetadata,
 } from './content-index.service';
 
 describe('ContentIndexService helpers', () => {
@@ -25,5 +26,21 @@ describe('ContentIndexService helpers', () => {
       '&lt;script&gt;<mark>React</mark>&lt;/script&gt;',
     );
     expect(snippet.html).not.toContain('<script>');
+  });
+
+  it('parses vector metadata for embedding index freshness checks', () => {
+    expect(
+      parseVectorMetadata(
+        JSON.stringify({
+          embeddingProvider: 'openai-compatible',
+          embeddingModel: 'text-embedding-3-small',
+        }),
+      ),
+    ).toEqual({
+      embeddingProvider: 'openai-compatible',
+      embeddingModel: 'text-embedding-3-small',
+    });
+
+    expect(parseVectorMetadata('bad-json')).toEqual({});
   });
 });

@@ -131,6 +131,8 @@ export class AiService {
       baseUrl: config.baseUrl,
       model: config.model,
       apiKey: config.apiKey,
+      embeddingProvider: config.embeddingProvider,
+      embeddingModel: config.embeddingModel,
       ragSourceCount: config.ragSourceCount,
       ragContextChars: config.ragContextChars,
       ragExcerptChars: config.ragExcerptChars,
@@ -144,6 +146,7 @@ export class AiService {
     }
 
     const ragConfig = this.normalizeRagConfig(config);
+    const embeddingConfig = normalizeEmbeddingConfig(config);
 
     const saved = await this.prisma.aiConfig.upsert({
       where: { id: DEFAULT_AI_CONFIG_ID },
@@ -152,6 +155,8 @@ export class AiService {
         baseUrl: config.baseUrl?.trim() || null,
         model: config.model?.trim() || null,
         apiKey: encryptSecret(config.apiKey),
+        embeddingProvider: embeddingConfig.embeddingProvider,
+        embeddingModel: embeddingConfig.embeddingModel,
         ragSourceCount: ragConfig.ragSourceCount,
         ragContextChars: ragConfig.ragContextChars,
         ragExcerptChars: ragConfig.ragExcerptChars,
@@ -162,6 +167,8 @@ export class AiService {
         baseUrl: config.baseUrl?.trim() || null,
         model: config.model?.trim() || null,
         apiKey: encryptSecret(config.apiKey),
+        embeddingProvider: embeddingConfig.embeddingProvider,
+        embeddingModel: embeddingConfig.embeddingModel,
         ragSourceCount: ragConfig.ragSourceCount,
         ragContextChars: ragConfig.ragContextChars,
         ragExcerptChars: ragConfig.ragExcerptChars,
@@ -169,6 +176,7 @@ export class AiService {
     });
 
     const savedRagConfig = this.normalizeRagConfig(saved);
+    const savedEmbeddingConfig = normalizeEmbeddingConfig(saved);
 
     return {
       id: saved.id,
@@ -176,6 +184,8 @@ export class AiService {
       baseUrl: saved.baseUrl ?? undefined,
       model: saved.model ?? undefined,
       apiKey: decryptSecret(saved.apiKey),
+      embeddingProvider: savedEmbeddingConfig.embeddingProvider,
+      embeddingModel: savedEmbeddingConfig.embeddingModel,
       ragSourceCount: savedRagConfig.ragSourceCount,
       ragContextChars: savedRagConfig.ragContextChars,
       ragExcerptChars: savedRagConfig.ragExcerptChars,
@@ -740,6 +750,16 @@ export class AiService {
         persisted?.ragExcerptChars ??
         toOptionalNumber(process.env.AI_RAG_EXCERPT_CHARS),
     });
+    const embeddingConfig = normalizeEmbeddingConfig({
+      embeddingProvider:
+        config?.embeddingProvider ??
+        persisted?.embeddingProvider ??
+        process.env.AI_EMBEDDING_PROVIDER,
+      embeddingModel:
+        config?.embeddingModel ??
+        persisted?.embeddingModel ??
+        process.env.AI_EMBEDDING_MODEL,
+    });
     const mode =
       config?.mode ??
       persisted?.mode ??
@@ -754,6 +774,8 @@ export class AiService {
         'https://api.openai.com/v1',
       apiKey: config?.apiKey || persisted?.apiKey || envApiKey || '',
       model: config?.model || persisted?.model || envModel || 'gpt-4o-mini',
+      embeddingProvider: embeddingConfig.embeddingProvider,
+      embeddingModel: embeddingConfig.embeddingModel,
       ragSourceCount: ragConfig.ragSourceCount,
       ragContextChars: ragConfig.ragContextChars,
       ragExcerptChars: ragConfig.ragExcerptChars,
@@ -807,12 +829,15 @@ export class AiService {
     }
 
     const ragConfig = this.normalizeRagConfig(saved);
+    const embeddingConfig = normalizeEmbeddingConfig(saved);
 
     return {
       mode: saved.mode === 'openai-compatible' ? 'openai-compatible' : 'local',
       baseUrl: saved.baseUrl ?? undefined,
       model: saved.model ?? undefined,
       apiKey: decryptSecret(saved.apiKey),
+      embeddingProvider: embeddingConfig.embeddingProvider,
+      embeddingModel: embeddingConfig.embeddingModel,
       ragSourceCount: ragConfig.ragSourceCount,
       ragContextChars: ragConfig.ragContextChars,
       ragExcerptChars: ragConfig.ragExcerptChars,
@@ -1037,4 +1062,25 @@ function clampInteger(
 
 function toOptionalNumber(value?: string) {
   return value === undefined ? undefined : Number(value);
+}
+
+function normalizeEmbeddingConfig(config: {
+  embeddingProvider?: unknown;
+  embeddingModel?: unknown;
+}) {
+  const embeddingProvider =
+    config.embeddingProvider === 'openai-compatible'
+      ? 'openai-compatible'
+      : 'local';
+  const embeddingModel =
+    typeof config.embeddingModel === 'string' && config.embeddingModel.trim()
+      ? config.embeddingModel.trim()
+      : embeddingProvider === 'openai-compatible'
+        ? 'text-embedding-3-small'
+        : 'local-hash-v1';
+
+  return {
+    embeddingProvider,
+    embeddingModel,
+  } as const;
 }

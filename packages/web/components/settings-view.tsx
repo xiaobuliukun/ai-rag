@@ -101,6 +101,8 @@ export function SettingsView() {
             baseUrl: config.baseUrl,
             model: config.model,
             apiKey: config.apiKey,
+            embeddingProvider: config.embeddingProvider,
+            embeddingModel: config.embeddingModel,
             ragSourceCount: config.ragSourceCount,
             ragContextChars: config.ragContextChars,
             ragExcerptChars: config.ragExcerptChars,
@@ -128,6 +130,8 @@ export function SettingsView() {
         baseUrl: saved.baseUrl,
         model: saved.model,
         apiKey: saved.apiKey,
+        embeddingProvider: saved.embeddingProvider,
+        embeddingModel: saved.embeddingModel,
         ragSourceCount: saved.ragSourceCount,
         ragContextChars: saved.ragContextChars,
         ragExcerptChars: saved.ragExcerptChars,
@@ -424,6 +428,55 @@ export function SettingsView() {
             className="h-10 w-full rounded-md border bg-background px-3 text-sm outline-none transition-all focus:ring-2 focus:ring-primary/50"
           />
         </label>
+
+        <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <div>
+            <div className="mb-2 text-sm font-medium">
+              {t("settings.embeddingProvider")}
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setAIConfig({ embeddingProvider: "local" })}
+                className={cn(
+                  "h-10 rounded-md border bg-background px-3 text-sm font-medium transition-all hover:border-accent hover:text-accent",
+                  (aiConfig.embeddingProvider ?? "local") === "local" &&
+                    "border-primary text-primary ring-2 ring-primary/20",
+                )}
+              >
+                {t("settings.localEmbedding")}
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setAIConfig({ embeddingProvider: "openai-compatible" })
+                }
+                className={cn(
+                  "h-10 rounded-md border bg-background px-3 text-sm font-medium transition-all hover:border-accent hover:text-accent",
+                  aiConfig.embeddingProvider === "openai-compatible" &&
+                    "border-primary text-primary ring-2 ring-primary/20",
+                )}
+              >
+                {t("settings.openaiEmbedding")}
+              </button>
+            </div>
+          </div>
+
+          <label className="block">
+            <div className="mb-2 text-sm font-medium">
+              {t("settings.embeddingModel")}
+            </div>
+            <input
+              value={aiConfig.embeddingModel ?? ""}
+              onChange={(event) =>
+                setAIConfig({ embeddingModel: event.target.value })
+              }
+              placeholder="text-embedding-3-small"
+              disabled={(aiConfig.embeddingProvider ?? "local") === "local"}
+              className="h-10 w-full rounded-md border bg-background px-3 text-sm outline-none transition-all focus:ring-2 focus:ring-primary/50 disabled:cursor-not-allowed disabled:opacity-60"
+            />
+          </label>
+        </div>
 
         <div className="space-y-5 rounded-md border bg-background p-4">
           <div className="flex items-center gap-2 text-sm font-semibold">

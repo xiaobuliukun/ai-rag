@@ -52,7 +52,7 @@ graph TD
 
 * **全文检索**: SQLite FTS5
 
-* **语义检索**: 本地 hash embedding + SQLite `VectorData` 表
+* **语义检索**: 本地 hash embedding 或 OpenAI-compatible `/embeddings` + SQLite `VectorData` 表
 
 * **Markdown处理**: gray-matter + react-markdown
 
@@ -178,7 +178,7 @@ GET /api/ai/config
 PUT /api/ai/config
 ```
 
-配置项包括模型模式、OpenAI-compatible 连接信息、API Key，以及 RAG 的引用数量、上下文字数、摘录长度。API Key 在数据库中加密保存，备份导出时脱敏。
+配置项包括模型模式、OpenAI-compatible 连接信息、API Key、embedding provider/model，以及 RAG 的引用数量、上下文字数、摘录长度。API Key 在数据库中加密保存，备份导出时脱敏。Embedding 默认使用本地 hash 向量；选择 OpenAI-compatible 且配置 key 后会调用 `/embeddings`，向量配置变化时自动重建 SQLite `VectorData` 索引。
 
 ### 4.4 搜索API
 

@@ -8,6 +8,8 @@ type AiConfigRecord = {
   baseUrl: string | null;
   model: string | null;
   apiKey: string | null;
+  embeddingProvider: string;
+  embeddingModel: string | null;
   ragSourceCount: number;
   ragContextChars: number;
   ragExcerptChars: number;
@@ -17,6 +19,8 @@ type AiConfigRecord = {
 type AiConfigUpsertPayload = {
   create: {
     apiKey: string | null;
+    embeddingProvider: string;
+    embeddingModel: string | null;
     ragSourceCount: number;
     ragContextChars: number;
     ragExcerptChars: number;
@@ -255,6 +259,8 @@ describe('AiService', () => {
           baseUrl: 'https://api.example.com/v1',
           model: 'gpt-test',
           apiKey: encryptSecret('sk-test'),
+          embeddingProvider: 'openai-compatible',
+          embeddingModel: 'text-embedding-3-small',
           ragSourceCount: 10,
           ragContextChars: 4000,
           ragExcerptChars: 900,
@@ -269,6 +275,8 @@ describe('AiService', () => {
         baseUrl: 'https://api.example.com/v1',
         model: 'gpt-test',
         apiKey: 'sk-test',
+        embeddingProvider: 'openai-compatible',
+        embeddingModel: 'text-embedding-3-small',
         ragSourceCount: 99,
         ragContextChars: 100,
         ragExcerptChars: 9999,
@@ -276,6 +284,8 @@ describe('AiService', () => {
     ).resolves.toMatchObject({
       mode: 'openai-compatible',
       apiKey: 'sk-test',
+      embeddingProvider: 'openai-compatible',
+      embeddingModel: 'text-embedding-3-small',
       ragSourceCount: 10,
       ragContextChars: 4000,
       ragExcerptChars: 900,
@@ -284,6 +294,10 @@ describe('AiService', () => {
 
     expect(capturedPayload).toBeDefined();
     expect(capturedPayload?.create.apiKey).toMatch(/^enc:v1:/);
+    expect(capturedPayload?.create.embeddingProvider).toBe('openai-compatible');
+    expect(capturedPayload?.create.embeddingModel).toBe(
+      'text-embedding-3-small',
+    );
     expect(capturedPayload?.create.ragSourceCount).toBe(10);
     expect(capturedPayload?.create.ragContextChars).toBe(4000);
     expect(capturedPayload?.create.ragExcerptChars).toBe(900);

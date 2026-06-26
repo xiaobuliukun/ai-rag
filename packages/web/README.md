@@ -14,6 +14,7 @@ npm run test:smoke -w packages/web
 
 开发服务默认绑定 `127.0.0.1`。前端 API 地址默认是 `http://localhost:3001/api`，可通过 `NEXT_PUBLIC_API_BASE_URL` 覆盖。
 `test:smoke` 需要先有一次成功的 `npm run build -w packages/web`，它会启动 `next start` 并检查核心页面是否能返回应用壳。
+如果 Markdown 书籍里有额外远程图片域名，可用 `NEXT_PUBLIC_IMAGE_HOSTS=img.example.com,cdn.example.com` 追加 Next Image 白名单。
 
 ## Routes
 

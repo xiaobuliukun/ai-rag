@@ -3,7 +3,12 @@ import { spawn } from 'node:child_process';
 const HOST = '127.0.0.1';
 const PORT = 3210;
 const BASE_URL = `http://${HOST}:${PORT}`;
-const ROUTES = ['/', '/search', '/management', '/settings'];
+const ROUTES = [
+  { path: '/', expectedText: '书库' },
+  { path: '/search', expectedText: '搜索' },
+  { path: '/management', expectedText: '书籍管理' },
+  { path: '/settings', expectedText: '设置' },
+];
 
 const server = spawn(
   'npm',
@@ -53,14 +58,17 @@ try {
   await waitForServer();
 
   for (const route of ROUTES) {
-    const response = await fetch(`${BASE_URL}${route}`);
+    const response = await fetch(`${BASE_URL}${route.path}`);
     if (!response.ok) {
-      throw new Error(`${route} returned ${response.status}`);
+      throw new Error(`${route.path} returned ${response.status}`);
     }
 
     const html = await response.text();
     if (!html.includes('Juejin Flow')) {
-      throw new Error(`${route} did not render the app shell`);
+      throw new Error(`${route.path} did not render the app shell`);
+    }
+    if (!html.includes(route.expectedText)) {
+      throw new Error(`${route.path} did not render expected route content`);
     }
   }
 
