@@ -3,6 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   BookOpen,
   ChevronRight,
@@ -21,11 +22,14 @@ import { buildChapterTree, ChapterTreeNode } from "@/lib/chapters";
 import { useI18n } from "@/lib/i18n";
 
 const LIBRARY_REFRESH_EVENT = "library:refresh";
+const treeTransition = { duration: 0.24, ease: [0.25, 1, 0.5, 1] } as const;
+const treeExitTransition = { duration: 0.16, ease: [0.22, 1, 0.36, 1] } as const;
 
 export function AppSidebar() {
   const { t } = useI18n();
   const pathname = usePathname();
   const { isSidebarOpen } = useStore();
+  const shouldReduceMotion = useReducedMotion();
   const [books, setBooks] = React.useState<Book[]>([]);
   const [expandedBooks, setExpandedBooks] = React.useState<string[]>([]);
 
@@ -140,35 +144,81 @@ export function AppSidebar() {
           </span>
         </div>
         <div className="scrollbar-soft min-h-0 flex-1 space-y-1 overflow-y-auto pr-2">
-          {books.map((book) => (
-            <div key={book.id}>
-              <button
-                onClick={() => toggleBook(book.id)}
-                className="sidebar-book-button flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm font-medium transition-colors"
-              >
-                <span className="truncate">{book.title}</span>
-                <ChevronRight
-                  className={cn(
-                    "h-4 w-4 transition-transform",
-                    expandedBooks.includes(book.id) && "rotate-90",
-                  )}
-                />
-              </button>
+          {books.map((book) => {
+            const isExpanded = expandedBooks.includes(book.id);
+            const chapterTreeId = `sidebar-book-${book.id}-chapters`;
 
-              {expandedBooks.includes(book.id) && (
-                <div className="sidebar-chapter-tree ml-4 mt-1 space-y-1 border-l pl-2">
-                  {buildChapterTree(book.chapters ?? []).map((node) => (
-                    <SidebarChapterNode
-                      key={node.id}
-                      bookId={book.id}
-                      node={node}
-                      pathname={pathname}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
+            return (
+              <motion.div
+                key={book.id}
+                layout={shouldReduceMotion ? false : "position"}
+                transition={treeTransition}
+              >
+                <button
+                  type="button"
+                  onClick={() => toggleBook(book.id)}
+                  aria-expanded={isExpanded}
+                  aria-controls={chapterTreeId}
+                  className="sidebar-book-button flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm font-medium transition-colors"
+                >
+                  <span className="truncate">{book.title}</span>
+                  <ChevronRight
+                    className={cn(
+                      "h-4 w-4 transition-transform duration-200 [transition-timing-function:cubic-bezier(0.25,1,0.5,1)]",
+                      isExpanded && "rotate-90",
+                    )}
+                  />
+                </button>
+
+                <AnimatePresence initial={false}>
+                  {isExpanded && (
+                    <motion.div
+                      id={chapterTreeId}
+                      className="sidebar-chapter-tree ml-4 mt-1 space-y-1 overflow-hidden border-l pl-2"
+                      initial={
+                        shouldReduceMotion
+                          ? { opacity: 0 }
+                          : {
+                              opacity: 0,
+                              y: -6,
+                              clipPath: "inset(0 0 100% 0)",
+                            }
+                      }
+                      animate={
+                        shouldReduceMotion
+                          ? { opacity: 1 }
+                          : {
+                              opacity: 1,
+                              y: 0,
+                              clipPath: "inset(0 0 0% 0)",
+                            }
+                      }
+                      exit={
+                        shouldReduceMotion
+                          ? { opacity: 0 }
+                          : {
+                              opacity: 0,
+                              y: -4,
+                              clipPath: "inset(0 0 100% 0)",
+                              transition: treeExitTransition,
+                            }
+                      }
+                      transition={treeTransition}
+                    >
+                      {buildChapterTree(book.chapters ?? []).map((node) => (
+                        <SidebarChapterNode
+                          key={node.id}
+                          bookId={book.id}
+                          node={node}
+                          pathname={pathname}
+                        />
+                      ))}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </motion.div>
+            );
+          })}
         </div>
       </div>
 
