@@ -195,7 +195,7 @@ export function AIAssistantPanel() {
   return (
     <aside
       className={cn(
-        "fixed right-0 top-0 z-40 flex h-screen max-w-[calc(100vw-1rem)] flex-col border-l bg-card/95 shadow-2xl backdrop-blur transition-transform duration-300",
+        "ai-panel-shell fixed right-0 top-0 z-40 flex h-screen max-w-[calc(100vw-1rem)] flex-col border-l shadow-2xl backdrop-blur transition-transform duration-300",
         isAIPanelOpen ? "translate-x-0" : "translate-x-full",
       )}
       style={{ width: aiPanelWidth }}
@@ -221,7 +221,7 @@ export function AIAssistantPanel() {
           <GripVertical className="h-4 w-4" />
         </span>
       </button>
-      <div className="flex h-14 items-center justify-between border-b px-4">
+      <div className="ai-panel-header flex h-14 items-center justify-between border-b px-4">
         <div className="flex min-w-0 items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary text-primary-foreground">
             <Sparkles className="h-4 w-4" />
@@ -243,7 +243,7 @@ export function AIAssistantPanel() {
         </button>
       </div>
 
-      <div className="border-b px-4 py-3">
+      <div className="ai-prompt-bar border-b px-4 py-3">
         <div className="flex flex-wrap gap-2">
           {promptKeys.map((promptKey) => (
             <button
@@ -261,12 +261,19 @@ export function AIAssistantPanel() {
 
       <div ref={messagesRef} className="scrollbar-soft flex-1 space-y-4 overflow-x-hidden overflow-y-auto px-4 py-4">
         {messages.length === 0 && (
-          <div className="rounded-lg border bg-background/80 p-4 text-sm text-muted-foreground">
-            {readingContext?.selectedText
-              ? t("ai.selectionCaptured")
-              : readingContext?.chapterTitle
-                ? t("ai.currentChapterReady")
-                : t("ai.noChapter")}
+          <div className="ai-empty-state rounded-lg border p-4 text-sm text-muted-foreground">
+            <div className="flex items-start gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-secondary text-primary">
+                <Sparkles className="h-4 w-4" />
+              </div>
+              <div className="min-w-0">
+                {readingContext?.selectedText
+                  ? t("ai.selectionCaptured")
+                  : readingContext?.chapterTitle
+                    ? t("ai.currentChapterReady")
+                    : t("ai.noChapter")}
+              </div>
+            </div>
           </div>
         )}
 
@@ -285,10 +292,10 @@ export function AIAssistantPanel() {
             )}
             <div
               className={cn(
-                "min-w-0 max-w-[82%] overflow-hidden rounded-lg px-3 py-2 text-sm leading-6",
+                "ai-message-bubble min-w-0 max-w-[82%] overflow-hidden rounded-lg px-3 py-2 text-sm leading-6",
                 message.role === "user"
-                  ? "bg-primary text-primary-foreground"
-                  : "border bg-background/80",
+                  ? "is-user bg-primary text-primary-foreground"
+                  : "border",
               )}
             >
               {message.content ? (
@@ -355,7 +362,7 @@ export function AIAssistantPanel() {
         )}
       </div>
 
-      <form onSubmit={handleSubmit} className="border-t p-4">
+      <form onSubmit={handleSubmit} className="ai-input-bar border-t p-4">
         <div className="flex gap-2">
           <textarea
             value={input}

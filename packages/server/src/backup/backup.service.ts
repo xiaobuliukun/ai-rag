@@ -4,7 +4,7 @@ import type {
   ImportBackupMode,
   ImportBackupRequest,
   ImportBackupResponse,
-} from '@juejin-flow/shared';
+} from '@moxu/shared';
 import { Prisma } from '@prisma/client';
 import { encryptSecret } from '../ai/secrets';
 import { chunkMarkdownContent } from '../content/chunking';

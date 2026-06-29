@@ -3,7 +3,7 @@ import type {
   AiChatRequest,
   AiChatStreamEvent,
   AiRuntimeConfig,
-} from '@juejin-flow/shared';
+} from '@moxu/shared';
 import type { Response } from 'express';
 import { AiService } from './ai.service';
 

@@ -1,5 +1,5 @@
 {
-  "name": "@juejin-flow/server",
+  "name": "@moxu/server",
   "version": "0.1.0",
   "description": "",
   "author": "",
@@ -21,7 +21,7 @@
     "test:e2e": "jest --config ./test/jest-e2e.json"
   },
   "dependencies": {
-    "@juejin-flow/shared": "*",
+    "@moxu/shared": "*",
     "@nestjs/common": "^11.0.1",
     "@nestjs/core": "^11.0.1",
     "@nestjs/platform-express": "^11.0.1",

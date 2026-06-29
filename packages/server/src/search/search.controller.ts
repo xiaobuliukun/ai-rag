@@ -1,5 +1,5 @@
 import { Controller, Get, Query } from '@nestjs/common';
-import type { SearchResultType } from '@juejin-flow/shared';
+import type { SearchResultType } from '@moxu/shared';
 import { SearchService } from './search.service';
 
 @Controller('search')

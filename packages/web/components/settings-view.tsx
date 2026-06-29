@@ -145,13 +145,15 @@ export function SettingsView() {
   };
 
   return (
-    <div className="mx-auto max-w-4xl space-y-8">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">{t("settings.title")}</h1>
-        <p className="mt-1 text-muted-foreground">{t("settings.subtitle")}</p>
+    <div className="settings-view mx-auto grid min-h-full max-w-6xl gap-5 lg:grid-cols-2">
+      <div className="lg:col-span-2">
+        <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
+          {t("settings.title")}
+        </h1>
+        <p className="mt-2 text-muted-foreground">{t("settings.subtitle")}</p>
       </div>
 
-      <section className="space-y-4 rounded-lg border bg-card p-5 shadow-sm">
+      <section className="settings-panel space-y-4 rounded-lg border p-5">
         <div>
           <h2 className="font-semibold">{t("settings.language")}</h2>
         </div>
@@ -174,7 +176,7 @@ export function SettingsView() {
         </div>
       </section>
 
-      <section className="space-y-4 rounded-lg border bg-card p-5 shadow-sm">
+      <section className="settings-panel space-y-4 rounded-lg border p-5">
         <div>
           <h2 className="font-semibold">{t("settings.theme")}</h2>
         </div>
@@ -202,7 +204,7 @@ export function SettingsView() {
         </div>
       </section>
 
-      <section className="space-y-6 rounded-lg border bg-card p-5 shadow-sm">
+      <section className="settings-panel space-y-6 rounded-lg border p-5">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-md bg-secondary text-primary">
             <Type className="h-5 w-5" />
@@ -355,7 +357,7 @@ export function SettingsView() {
         </div>
       </section>
 
-      <section className="space-y-6 rounded-lg border bg-card p-5 shadow-sm">
+      <section className="settings-panel space-y-6 rounded-lg border p-5 lg:row-span-2">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-md bg-secondary text-primary">
             <Bot className="h-5 w-5" />
@@ -562,8 +564,10 @@ export function SettingsView() {
           {(aiStatus || aiError) && (
             <span
               className={cn(
-                "text-sm",
-                aiError ? "text-destructive" : "text-muted-foreground",
+                "rounded-md border px-3 py-2 text-sm",
+                aiError
+                  ? "border-destructive/40 bg-destructive/10 text-destructive"
+                  : "border-primary/30 bg-primary/10 text-primary",
               )}
             >
               {aiError ?? aiStatus}

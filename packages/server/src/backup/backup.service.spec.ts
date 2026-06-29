@@ -1,4 +1,4 @@
-import type { BackupPayload } from '@juejin-flow/shared';
+import type { BackupPayload } from '@moxu/shared';
 import { BackupService } from './backup.service';
 
 describe('BackupService', () => {

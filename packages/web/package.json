@@ -1,5 +1,5 @@
 {
-  "name": "@juejin-flow/web",
+  "name": "@moxu/web",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -11,7 +11,7 @@
     "test:smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
-    "@juejin-flow/shared": "*",
+    "@moxu/shared": "*",
     "@tailwindcss/typography": "^0.5.19",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

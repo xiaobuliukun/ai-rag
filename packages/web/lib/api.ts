@@ -130,6 +130,7 @@ export function searchLibrary(
   query: string,
   bookId?: string,
   type: SearchResultType = "all",
+  init?: ApiInit,
 ) {
   const params = new URLSearchParams({ q: query });
   if (bookId) {
@@ -141,6 +142,7 @@ export function searchLibrary(
 
   return fetchJson<SearchResult[]>(`/search?${params.toString()}`, {
     cache: "no-store",
+    ...init,
   });
 }
 

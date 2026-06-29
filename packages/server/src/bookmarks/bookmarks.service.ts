@@ -6,7 +6,7 @@ import {
 import type {
   CreateBookmarkRequest,
   UpdateBookmarkRequest,
-} from '@juejin-flow/shared';
+} from '@moxu/shared';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()

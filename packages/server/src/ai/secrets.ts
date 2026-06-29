@@ -69,7 +69,7 @@ function encryptionKey() {
   const secret =
     process.env.AI_CONFIG_SECRET ??
     process.env.DATABASE_URL ??
-    'juejin-flow-local-ai-config';
+    'moxu-local-ai-config';
 
   return createHash('sha256').update(secret).digest();
 }

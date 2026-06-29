@@ -125,7 +125,7 @@ export const useStore = create<AppState>()(
       setReadingContext: (context) => set({ readingContext: context }),
     }),
     {
-      name: "juejin-flow-preferences",
+      name: "moxu-preferences",
       partialize: (state) => ({
         isSidebarOpen: state.isSidebarOpen,
         aiPanelWidth: state.aiPanelWidth,

@@ -29,7 +29,7 @@ describe('ScanService', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'juejin-flow-scan-'));
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'moxu-scan-'));
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [

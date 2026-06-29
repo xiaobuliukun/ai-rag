@@ -13,7 +13,7 @@ module.exports = {
   },
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/$1',
-    '^@juejin-flow/shared$': '<rootDir>/../shared/src',
+    '^@moxu/shared$': '<rootDir>/../shared/src',
   },
   watchman: false,
 };

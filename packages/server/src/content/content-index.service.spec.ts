@@ -28,6 +28,16 @@ describe('ContentIndexService helpers', () => {
     expect(snippet.html).not.toContain('<script>');
   });
 
+  it('highlights Chinese phrases with token fallback', () => {
+    const snippet = createHighlightedSnippet(
+      '前端性能优化需要同时关注渲染、缓存和交互延迟。',
+      '前端 性能',
+    );
+
+    expect(snippet.html).toContain('<mark>前端</mark>');
+    expect(snippet.html).toContain('<mark>性能</mark>');
+  });
+
   it('parses vector metadata for embedding index freshness checks', () => {
     expect(
       parseVectorMetadata(

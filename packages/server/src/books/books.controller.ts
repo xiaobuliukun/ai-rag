@@ -7,7 +7,7 @@ import {
   ParseFloatPipe,
   Put,
 } from '@nestjs/common';
-import type { UpdateBookRequest } from '@juejin-flow/shared';
+import type { UpdateBookRequest } from '@moxu/shared';
 import { BooksService } from './books.service';
 
 @Controller('books')

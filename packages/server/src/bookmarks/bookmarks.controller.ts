@@ -11,7 +11,7 @@ import {
 import type {
   CreateBookmarkRequest,
   UpdateBookmarkRequest,
-} from '@juejin-flow/shared';
+} from '@moxu/shared';
 import { BookmarksService } from './bookmarks.service';
 
 @Controller('bookmarks')

@@ -13,7 +13,7 @@
     ],
     "paths": {
       "@/*": ["./*"],
-      "@juejin-flow/shared": ["../shared/src"]
+      "@moxu/shared": ["../shared/src"]
     }
   },
   "include": [

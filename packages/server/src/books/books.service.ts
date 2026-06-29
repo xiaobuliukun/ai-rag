@@ -3,7 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import type { LibraryStats, UpdateBookRequest } from '@juejin-flow/shared';
+import type { LibraryStats, UpdateBookRequest } from '@moxu/shared';
 import { PrismaService } from '../prisma/prisma.service';
 
 const AVERAGE_READING_CHARS_PER_MINUTE = 450;

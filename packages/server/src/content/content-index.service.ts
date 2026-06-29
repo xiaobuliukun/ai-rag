@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import type { SearchIndexStatus } from '@juejin-flow/shared';
+import type { SearchIndexStatus } from '@moxu/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { decryptSecret } from '../ai/secrets';
 import {
@@ -170,27 +170,25 @@ export class ContentIndexService {
     await this.ensureIndexReady();
 
     const limit = options?.limit ?? DEFAULT_LIMIT;
-    const rows = options?.bookId
-      ? await this.prisma.$queryRawUnsafe<ChunkFtsRow[]>(
-          'SELECT "chunkId", "bookId", "chapterId", "bookTitle", "chapterTitle", bm25("ChapterChunkFts") AS "rank" FROM "ChapterChunkFts" WHERE "ChapterChunkFts" MATCH ? AND "bookId" = ? ORDER BY "rank" LIMIT ?',
-          ftsQuery,
-          options.bookId,
-          limit,
-        )
-      : await this.prisma.$queryRawUnsafe<ChunkFtsRow[]>(
-          'SELECT "chunkId", "bookId", "chapterId", "bookTitle", "chapterTitle", bm25("ChapterChunkFts") AS "rank" FROM "ChapterChunkFts" WHERE "ChapterChunkFts" MATCH ? ORDER BY "rank" LIMIT ?',
-          ftsQuery,
-          limit,
-        );
+    const rows = await this.searchFtsRows(ftsQuery, options?.bookId, limit * 2);
+    const relaxedQuery = buildFtsQuery(query, 'or');
+    const relaxedRows =
+      options?.mode !== 'or' &&
+      relaxedQuery &&
+      relaxedQuery !== ftsQuery &&
+      rows.length < Math.min(8, limit)
+        ? await this.searchFtsRows(relaxedQuery, options?.bookId, limit)
+        : [];
+    const mergedRows = mergeFtsRows(rows, relaxedRows).slice(0, limit);
 
-    if (!rows.length) {
+    if (!mergedRows.length) {
       return [];
     }
 
     const chunks = await this.prisma.chapterChunk.findMany({
       where: {
         id: {
-          in: rows.map((row) => row.chunkId),
+          in: mergedRows.map((row) => row.chunkId),
         },
       },
       select: {
@@ -202,7 +200,7 @@ export class ContentIndexService {
       chunks.map((chunk) => [chunk.id, chunk.content]),
     );
 
-    return rows.flatMap((row) => {
+    return mergedRows.flatMap((row) => {
       const content = chunkContentById.get(row.chunkId);
       if (!content) {
         return [];
@@ -219,10 +217,38 @@ export class ContentIndexService {
           content,
           excerpt: snippet.text,
           highlightedExcerpt: snippet.html,
-          score: Math.max(1, Math.round(Math.abs(row.rank) * 1000)),
+          score: Math.max(
+            1,
+            Math.round(
+              Math.abs(row.rank) * 1000 +
+                scoreContentMatch(
+                  `${row.bookTitle}\n${row.chapterTitle}\n${content}`,
+                  query,
+                ),
+            ),
+          ),
         },
       ];
     });
+  }
+
+  private searchFtsRows(
+    ftsQuery: string,
+    bookId: string | undefined,
+    limit: number,
+  ) {
+    return bookId
+      ? this.prisma.$queryRawUnsafe<ChunkFtsRow[]>(
+          'SELECT "chunkId", "bookId", "chapterId", "bookTitle", "chapterTitle", bm25("ChapterChunkFts") AS "rank" FROM "ChapterChunkFts" WHERE "ChapterChunkFts" MATCH ? AND "bookId" = ? ORDER BY "rank" LIMIT ?',
+          ftsQuery,
+          bookId,
+          limit,
+        )
+      : this.prisma.$queryRawUnsafe<ChunkFtsRow[]>(
+          'SELECT "chunkId", "bookId", "chapterId", "bookTitle", "chapterTitle", bm25("ChapterChunkFts") AS "rank" FROM "ChapterChunkFts" WHERE "ChapterChunkFts" MATCH ? ORDER BY "rank" LIMIT ?',
+          ftsQuery,
+          limit,
+        );
   }
 
   private async ensureIndexReady() {
@@ -644,12 +670,69 @@ function toCount(value: number | bigint | undefined) {
 
 function extractHighlightTerms(query: string) {
   const latinTerms = query.match(/[a-z0-9][a-z0-9_-]*/gi) ?? [];
-  const cjkTerms = query.match(/[\u4e00-\u9fff]+/g) ?? [];
+  const cjkPhrases = Array.from(
+    query.matchAll(/[\u4e00-\u9fff]+/g),
+    (match) => match[0],
+  );
+  const cjkBigrams = cjkPhrases.flatMap((phrase) => {
+    const grams: string[] = [];
+    for (let index = 0; index < phrase.length - 1; index += 1) {
+      grams.push(phrase.slice(index, index + 2));
+    }
+    return grams;
+  });
+  const cjkChars = Array.from(
+    query.matchAll(/[\u4e00-\u9fff]/g),
+    (match) => match[0],
+  );
 
-  return Array.from(new Set([...latinTerms, ...cjkTerms]))
+  return Array.from(
+    new Set([...latinTerms, ...cjkPhrases, ...cjkBigrams, ...cjkChars]),
+  )
     .filter((term) => term.trim().length > 0)
     .sort((a, b) => b.length - a.length)
-    .slice(0, 12);
+    .slice(0, 18);
+}
+
+function mergeFtsRows(primaryRows: ChunkFtsRow[], relaxedRows: ChunkFtsRow[]) {
+  const rowsById = new Map<string, ChunkFtsRow>();
+
+  for (const row of primaryRows) {
+    rowsById.set(row.chunkId, row);
+  }
+
+  for (const row of relaxedRows) {
+    const existing = rowsById.get(row.chunkId);
+    rowsById.set(row.chunkId, {
+      ...row,
+      rank: existing ? Math.min(existing.rank, row.rank) : row.rank * 0.68,
+    });
+  }
+
+  return Array.from(rowsById.values()).sort(
+    (left, right) => Math.abs(right.rank) - Math.abs(left.rank),
+  );
+}
+
+function scoreContentMatch(text: string, query: string) {
+  const normalizedText = text.toLowerCase().replace(/\s+/g, '');
+  const normalizedQuery = query.toLowerCase().replace(/\s+/g, '');
+  if (!normalizedText || !normalizedQuery) {
+    return 0;
+  }
+
+  let score = normalizedText.includes(normalizedQuery) ? 120 : 0;
+  const terms = extractHighlightTerms(query);
+  const matched = terms.filter((term) =>
+    normalizedText.includes(term.toLowerCase()),
+  );
+
+  score += matched.reduce(
+    (total, term) => total + (term.length > 1 ? 18 : 4),
+    0,
+  );
+
+  return score;
 }
 
 function highlightHtml(text: string, terms: string[]) {

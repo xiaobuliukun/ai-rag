@@ -3,19 +3,29 @@ import type {
   SearchIndexStatus,
   SearchResult,
   SearchResultType,
-} from '@juejin-flow/shared';
+} from '@moxu/shared';
 import {
   ContentIndexService,
   ContentSearchResult,
+  SemanticSearchResult,
+  createHighlightedSnippet,
 } from '../content/content-index.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 const MAX_RESULTS = 50;
+const CONTENT_FETCH_LIMIT = 80;
 const SEARCH_TYPES: SearchResultType[] = ['all', 'book', 'chapter', 'content'];
+const RESULT_TYPE_PRIORITY: Record<SearchResult['type'], number> = {
+  book: 3,
+  chapter: 2,
+  content: 1,
+};
 
 type BookSearchRecord = {
   id: string;
   title: string;
+  description?: string | null;
+  tags?: string | null;
   chapters: Array<{
     id: string;
     isRead: boolean;
@@ -30,6 +40,16 @@ type ChapterSearchRecord = {
   book: {
     title: string;
   };
+};
+
+type QueryAnalysis = {
+  raw: string;
+  normalized: string;
+  terms: string[];
+  weightedTerms: Array<{
+    value: string;
+    weight: number;
+  }>;
 };
 
 @Injectable()
@@ -54,35 +74,43 @@ export class SearchService {
     }
 
     const resultType = SEARCH_TYPES.includes(type) ? type : 'all';
+    const analysis = analyzeQuery(keyword);
+    if (!analysis.terms.length) {
+      return [];
+    }
 
-    const bookSearch = this.searchBooks(keyword, bookId, resultType);
-    const chapterSearch = this.searchChapters(keyword, bookId, resultType);
-    const contentSearch = this.searchContent(keyword, bookId, resultType);
     const [books, chapters, chunks] = await Promise.all([
-      bookSearch,
-      chapterSearch,
-      contentSearch,
+      this.searchBooks(analysis, bookId, resultType),
+      this.searchChapters(analysis, bookId, resultType),
+      this.searchContent(analysis, bookId, resultType),
     ]);
 
     const bookResults: SearchResult[] = books.map((book) => ({
       id: book.id,
       type: 'book' as const,
       title: book.title,
-      content: `${book.chapters.filter((chapter) => chapter.isRead).length}/${book.chapters.length} chapters read`,
-      score: this.scoreText(book.title, keyword) + 20,
+      content: `${book.chapters.filter((chapter) => chapter.isRead).length}/${book.chapters.length} 章已读`,
+      score:
+        scoreText(book.title, analysis) * 1.9 +
+        scoreText(book.description ?? '', analysis) * 0.45 +
+        scoreText(book.tags ?? '', analysis) * 0.55 +
+        36,
       bookId: book.id,
       bookTitle: book.title,
     }));
 
     const chapterResults: SearchResult[] = chapters.map((chapter) => {
-      const titleScore = this.scoreText(chapter.title, keyword);
+      const titleScore = scoreText(chapter.title, analysis);
+      const fileNameScore = scoreText(chapter.fileName, analysis);
+      const bookTitleScore = scoreText(chapter.book.title, analysis);
 
       return {
         id: chapter.id,
         type: 'chapter' as const,
         title: chapter.title,
         content: chapter.fileName,
-        score: titleScore + 10,
+        score:
+          titleScore * 1.55 + fileNameScore * 0.42 + bookTitleScore * 0.3 + 24,
         bookId: chapter.bookId,
         chapterId: chapter.id,
         bookTitle: chapter.book.title,
@@ -102,28 +130,17 @@ export class SearchService {
     }));
 
     return [...bookResults, ...chapterResults, ...contentResults]
-      .sort((a, b) => b.score - a.score || a.title.localeCompare(b.title))
+      .sort(
+        (left, right) =>
+          right.score - left.score ||
+          RESULT_TYPE_PRIORITY[right.type] - RESULT_TYPE_PRIORITY[left.type] ||
+          left.title.localeCompare(right.title),
+      )
       .slice(0, MAX_RESULTS);
   }
 
-  private scoreText(text: string, keyword: string) {
-    const haystack = text.toLowerCase();
-    const needle = keyword.toLowerCase();
-
-    if (haystack === needle) {
-      return 100;
-    }
-    if (haystack.startsWith(needle)) {
-      return 70;
-    }
-    if (haystack.includes(needle)) {
-      return 35;
-    }
-    return 0;
-  }
-
   private searchBooks(
-    keyword: string,
+    analysis: QueryAnalysis,
     bookId: string | undefined,
     resultType: SearchResultType,
   ): Promise<BookSearchRecord[]> {
@@ -134,7 +151,7 @@ export class SearchService {
     return this.prisma.book.findMany({
       where: {
         ...(bookId ? { id: bookId } : {}),
-        title: { contains: keyword },
+        OR: buildBookWhere(analysis),
       },
       include: {
         chapters: {
@@ -147,7 +164,7 @@ export class SearchService {
   }
 
   private searchChapters(
-    keyword: string,
+    analysis: QueryAnalysis,
     bookId: string | undefined,
     resultType: SearchResultType,
   ): Promise<ChapterSearchRecord[]> {
@@ -158,7 +175,7 @@ export class SearchService {
     return this.prisma.chapter.findMany({
       where: {
         ...(bookId ? { bookId } : {}),
-        title: { contains: keyword },
+        OR: buildChapterWhere(analysis),
       },
       select: {
         id: true,
@@ -176,18 +193,186 @@ export class SearchService {
     });
   }
 
-  private searchContent(
-    keyword: string,
+  private async searchContent(
+    analysis: QueryAnalysis,
     bookId: string | undefined,
     resultType: SearchResultType,
   ): Promise<ContentSearchResult[]> {
     if (resultType !== 'all' && resultType !== 'content') {
-      return Promise.resolve([]);
+      return [];
     }
 
-    return this.contentIndex.search(keyword, {
-      bookId,
-      limit: MAX_RESULTS,
+    const [ftsResults, semanticResults] = await Promise.all([
+      this.contentIndex.search(analysis.raw, {
+        bookId,
+        limit: CONTENT_FETCH_LIMIT,
+      }),
+      this.contentIndex
+        .semanticSearch(analysis.raw, {
+          bookId,
+          limit: Math.min(24, CONTENT_FETCH_LIMIT),
+        })
+        .catch(() => [] as SemanticSearchResult[]),
+    ]);
+
+    return mergeContentResults(analysis, ftsResults, semanticResults).slice(
+      0,
+      MAX_RESULTS,
+    );
+  }
+}
+
+function analyzeQuery(query: string): QueryAnalysis {
+  const raw = query.trim();
+  const normalized = normalizeForSearch(raw);
+  const compactQuery = normalized.replace(/\s+/g, '');
+  const latinTerms = normalized.match(/[a-z0-9][a-z0-9_-]*/g) ?? [];
+  const cjkPhrases = Array.from(
+    normalized.matchAll(/[\u4e00-\u9fff]{2,}/g),
+    (match) => match[0],
+  );
+  const cjkChars = Array.from(
+    normalized.matchAll(/[\u4e00-\u9fff]/g),
+    (match) => match[0],
+  );
+  const cjkBigrams = cjkPhrases.flatMap((phrase) => {
+    const grams: string[] = [];
+    for (let index = 0; index < phrase.length - 1; index += 1) {
+      grams.push(phrase.slice(index, index + 2));
+    }
+    return grams;
+  });
+  const terms = uniqueTerms([
+    compactQuery,
+    ...latinTerms,
+    ...cjkPhrases,
+    ...cjkBigrams,
+    ...cjkChars,
+  ]).filter((term) => term.length > 0);
+
+  return {
+    raw,
+    normalized,
+    terms,
+    weightedTerms: terms.map((term) => ({
+      value: term,
+      weight:
+        /[\u4e00-\u9fff]/.test(term) && term.length === 1
+          ? 0.55
+          : term.length >= 4
+            ? 1.6
+            : 1,
+    })),
+  };
+}
+
+function buildBookWhere(analysis: QueryAnalysis) {
+  return analysis.terms.flatMap((term) => [
+    { title: { contains: term } },
+    { description: { contains: term } },
+    { tags: { contains: term } },
+  ]);
+}
+
+function buildChapterWhere(analysis: QueryAnalysis) {
+  return analysis.terms.flatMap((term) => [
+    { title: { contains: term } },
+    { fileName: { contains: term } },
+    {
+      book: {
+        title: { contains: term },
+      },
+    },
+  ]);
+}
+
+function mergeContentResults(
+  analysis: QueryAnalysis,
+  ftsResults: ContentSearchResult[],
+  semanticResults: SemanticSearchResult[],
+) {
+  const merged = new Map<string, ContentSearchResult>();
+
+  for (const result of ftsResults) {
+    const lexicalBoost =
+      scoreText(result.chapterTitle, analysis) * 0.72 +
+      scoreText(result.content, analysis) * 0.42;
+    merged.set(result.chunkId, {
+      ...result,
+      score: Math.round(result.score + lexicalBoost + 18),
     });
   }
+
+  for (const result of semanticResults) {
+    const existing = merged.get(result.chunkId);
+    const snippet = createHighlightedSnippet(result.content, analysis.raw);
+    const semanticBoost = Math.round(result.score * 1.65);
+    const lexicalBoost =
+      scoreText(result.chapterTitle, analysis) * 0.55 +
+      scoreText(result.content, analysis) * 0.26;
+
+    merged.set(result.chunkId, {
+      chunkId: result.chunkId,
+      bookId: result.bookId,
+      chapterId: result.chapterId,
+      bookTitle: result.bookTitle,
+      chapterTitle: result.chapterTitle,
+      content: result.content,
+      excerpt: existing?.excerpt ?? snippet.text,
+      highlightedExcerpt: existing?.highlightedExcerpt ?? snippet.html,
+      score: Math.round((existing?.score ?? 0) + semanticBoost + lexicalBoost),
+    });
+  }
+
+  return Array.from(merged.values()).sort(
+    (left, right) =>
+      right.score - left.score ||
+      left.chapterTitle.localeCompare(right.chapterTitle),
+  );
+}
+
+function scoreText(text: string, analysis: QueryAnalysis) {
+  const normalizedText = normalizeForSearch(text);
+  if (!normalizedText || !analysis.normalized) {
+    return 0;
+  }
+
+  const compactText = normalizedText.replace(/\s+/g, '');
+  const compactQuery = analysis.normalized.replace(/\s+/g, '');
+  let score = 0;
+
+  if (compactText === compactQuery) {
+    score += 240;
+  } else if (compactText.startsWith(compactQuery)) {
+    score += 170;
+  } else if (compactText.includes(compactQuery)) {
+    score += 132;
+  }
+
+  let matchedWeight = 0;
+  const totalWeight = analysis.weightedTerms.reduce(
+    (total, term) => total + term.weight,
+    0,
+  );
+
+  for (const term of analysis.weightedTerms) {
+    if (compactText.includes(term.value)) {
+      matchedWeight += term.weight;
+      score += 22 * term.weight;
+    }
+  }
+
+  if (totalWeight > 0) {
+    score += (matchedWeight / totalWeight) * 86;
+  }
+
+  return Math.round(score);
+}
+
+function normalizeForSearch(text: string) {
+  return text.trim().toLowerCase();
+}
+
+function uniqueTerms(terms: string[]) {
+  return Array.from(new Set(terms.map((term) => term.trim().toLowerCase())));
 }

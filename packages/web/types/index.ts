@@ -25,4 +25,4 @@ export type {
   UpdateBookRequest,
   UpdateBookmarkRequest,
   UpdateProgressRequest,
-} from "@juejin-flow/shared";
+} from "@moxu/shared";

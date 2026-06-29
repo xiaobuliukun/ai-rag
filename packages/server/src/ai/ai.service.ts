@@ -10,7 +10,7 @@ import {
   AiRuntimeConfig,
   AiSource,
   PersistedAiConfig,
-} from '@juejin-flow/shared';
+} from '@moxu/shared';
 import { chunkMarkdownContent } from '../content/chunking';
 import {
   ContentIndexService,

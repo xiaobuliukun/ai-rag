@@ -12,12 +12,17 @@ describe('SearchService', () => {
   const contentIndex = {
     getStatus: jest.fn(),
     search: jest.fn(),
+    semanticSearch: jest.fn(),
   };
 
   let service: SearchService;
 
   beforeEach(() => {
     jest.clearAllMocks();
+    prisma.book.findMany.mockResolvedValue([]);
+    prisma.chapter.findMany.mockResolvedValue([]);
+    contentIndex.search.mockResolvedValue([]);
+    contentIndex.semanticSearch.mockResolvedValue([]);
     service = new SearchService(prisma as never, contentIndex as never);
   });
 
@@ -26,6 +31,7 @@ describe('SearchService', () => {
     expect(prisma.book.findMany).not.toHaveBeenCalled();
     expect(prisma.chapter.findMany).not.toHaveBeenCalled();
     expect(contentIndex.search).not.toHaveBeenCalled();
+    expect(contentIndex.semanticSearch).not.toHaveBeenCalled();
   });
 
   it('returns search index status', async () => {
@@ -61,6 +67,7 @@ describe('SearchService', () => {
       },
     ]);
     prisma.chapter.findMany.mockResolvedValue([]);
+    contentIndex.semanticSearch.mockResolvedValue([]);
     contentIndex.search.mockResolvedValue([
       {
         chunkId: 'chunk-1',
@@ -114,12 +121,42 @@ describe('SearchService', () => {
     expect(prisma.chapter.findMany).not.toHaveBeenCalled();
     expect(contentIndex.search).toHaveBeenCalledWith(
       'React',
-      expect.objectContaining({ limit: 50 }),
+      expect.objectContaining({ limit: 80 }),
+    );
+    expect(contentIndex.semanticSearch).toHaveBeenCalledWith(
+      'React',
+      expect.objectContaining({ limit: 24 }),
     );
     expect(results).toHaveLength(1);
     expect(results[0]).toMatchObject({
       type: 'content',
       highlightedContent: '<mark>React</mark> hooks share stateful logic.',
     });
+  });
+
+  it('merges semantic-only matches into content results', async () => {
+    contentIndex.search.mockResolvedValue([]);
+    contentIndex.semanticSearch.mockResolvedValue([
+      {
+        chunkId: 'chunk-semantic',
+        bookId: 'book-1',
+        chapterId: 'chapter-3',
+        bookTitle: '前端性能优化',
+        chapterTitle: '渲染性能',
+        content: '这一章讨论长列表性能、缓存策略和交互延迟。',
+        score: 82,
+      },
+    ]);
+
+    const results = await service.search('列表性能', undefined, 'content');
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      type: 'content',
+      title: '渲染性能',
+      bookTitle: '前端性能优化',
+      chapterId: 'chapter-3',
+    });
+    expect(results[0].highlightedContent).toContain('<mark>列表性能</mark>');
   });
 });

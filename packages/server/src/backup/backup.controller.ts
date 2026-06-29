@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Post } from '@nestjs/common';
-import type { BackupPayload, ImportBackupRequest } from '@juejin-flow/shared';
+import type { BackupPayload, ImportBackupRequest } from '@moxu/shared';
 import { BackupService } from './backup.service';
 
 @Controller('backup')

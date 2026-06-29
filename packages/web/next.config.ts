@@ -12,7 +12,7 @@ function extraImagePatterns() {
 }
 
 const nextConfig: NextConfig = {
-  transpilePackages: ["@juejin-flow/shared"],
+  transpilePackages: ["@moxu/shared"],
   images: {
     remotePatterns: [
       {
