@@ -6,6 +6,11 @@ import { SearchService } from './search.service';
 export class SearchController {
   constructor(private readonly searchService: SearchService) {}
 
+  @Get('index-status')
+  getIndexStatus() {
+    return this.searchService.getIndexStatus();
+  }
+
   @Get()
   search(
     @Query('q') query = '',

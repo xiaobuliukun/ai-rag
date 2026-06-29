@@ -12,4 +12,9 @@ export class ScanController {
     }
     return this.scanService.scanDirectory(path);
   }
+
+  @Post('rescan-known')
+  rescanKnownBooks() {
+    return this.scanService.rescanKnownBooks();
+  }
 }

@@ -1,4 +1,4 @@
-# Juejin Flow Server
+# 墨序 Server
 
 NestJS API 服务，负责本地书库扫描、SQLite 数据持久化、全文检索、AI 上下文检索、书签、备份和本地资源读取。
 

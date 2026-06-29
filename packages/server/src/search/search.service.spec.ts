@@ -10,6 +10,7 @@ describe('SearchService', () => {
     },
   };
   const contentIndex = {
+    getStatus: jest.fn(),
     search: jest.fn(),
   };
 
@@ -25,6 +26,27 @@ describe('SearchService', () => {
     expect(prisma.book.findMany).not.toHaveBeenCalled();
     expect(prisma.chapter.findMany).not.toHaveBeenCalled();
     expect(contentIndex.search).not.toHaveBeenCalled();
+  });
+
+  it('returns search index status', async () => {
+    contentIndex.getStatus.mockResolvedValue({
+      totalBooks: 1,
+      totalChapters: 2,
+      totalChunks: 3,
+      ftsChunks: 3,
+      vectorChunks: 3,
+      isFtsReady: true,
+      isVectorReady: true,
+      embeddingProvider: 'local',
+      embeddingModel: 'local-hash-v1',
+    });
+
+    await expect(service.getIndexStatus()).resolves.toMatchObject({
+      totalChunks: 3,
+      isFtsReady: true,
+      isVectorReady: true,
+    });
+    expect(contentIndex.getStatus).toHaveBeenCalledTimes(1);
   });
 
   it('combines and ranks book, chapter, and content matches', async () => {

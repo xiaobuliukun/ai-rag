@@ -1,4 +1,4 @@
-# Juejin Flow Web
+# 墨序 Web
 
 Next.js 16 App Router + React 19 前端，用于本地 Markdown 小册阅读、书库管理、搜索、AI 助手、书签和阅读偏好设置。
 

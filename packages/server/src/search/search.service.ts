@@ -1,5 +1,9 @@
 import { Injectable } from '@nestjs/common';
-import { SearchResult, SearchResultType } from '@juejin-flow/shared';
+import type {
+  SearchIndexStatus,
+  SearchResult,
+  SearchResultType,
+} from '@juejin-flow/shared';
 import {
   ContentIndexService,
   ContentSearchResult,
@@ -34,6 +38,10 @@ export class SearchService {
     private prisma: PrismaService,
     private contentIndex: ContentIndexService,
   ) {}
+
+  getIndexStatus(): Promise<SearchIndexStatus> {
+    return this.contentIndex.getStatus();
+  }
 
   async search(
     query: string,

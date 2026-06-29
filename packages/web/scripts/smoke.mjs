@@ -64,7 +64,7 @@ try {
     }
 
     const html = await response.text();
-    if (!html.includes('Juejin Flow')) {
+    if (!html.includes('墨序')) {
       throw new Error(`${route.path} did not render the app shell`);
     }
     if (!html.includes(route.expectedText)) {

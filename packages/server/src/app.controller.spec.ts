@@ -14,9 +14,23 @@ describe('AppController', () => {
     appController = app.get<AppController>(AppController);
   });
 
-  describe('root', () => {
-    it('should return "Hello World!"', () => {
-      expect(appController.getHello()).toBe('Hello World!');
+  describe('status', () => {
+    it('returns app status', () => {
+      expect(appController.getStatus()).toEqual({
+        name: '墨序',
+        status: 'ok',
+        apiPrefix: 'api',
+        features: [
+          'library-scan',
+          'full-text-search',
+          'bookmarks',
+          'local-rag',
+        ],
+      });
+    });
+
+    it('returns a lightweight health response', () => {
+      expect(appController.getHealth()).toEqual({ status: 'ok' });
     });
   });
 });

@@ -1,6 +1,13 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import type { BackupPayload, ImportBackupResponse } from '@juejin-flow/shared';
+import type {
+  BackupPayload,
+  ImportBackupMode,
+  ImportBackupRequest,
+  ImportBackupResponse,
+} from '@juejin-flow/shared';
+import { Prisma } from '@prisma/client';
 import { encryptSecret } from '../ai/secrets';
+import { chunkMarkdownContent } from '../content/chunking';
 import { ContentIndexService } from '../content/content-index.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -89,11 +96,25 @@ export class BackupService {
     };
   }
 
-  async importBackup(payload: BackupPayload): Promise<ImportBackupResponse> {
+  async importBackup(
+    request: BackupPayload | ImportBackupRequest,
+  ): Promise<ImportBackupResponse> {
+    const { payload, mode } = normalizeImportRequest(request);
+
     if (!payload || payload.version !== 1 || !Array.isArray(payload.books)) {
       throw new BadRequestException('Unsupported backup payload');
     }
 
+    if (mode === 'merge') {
+      return this.mergeBackup(payload);
+    }
+
+    return this.replaceBackup(payload);
+  }
+
+  private async replaceBackup(
+    payload: BackupPayload,
+  ): Promise<ImportBackupResponse> {
     await this.prisma.$executeRawUnsafe('DELETE FROM "ChapterChunkFts"');
 
     await this.prisma.$transaction(async (tx) => {
@@ -138,12 +159,11 @@ export class BackupService {
 
           if (chapter.chunks?.length) {
             await tx.chapterChunk.createMany({
-              data: chapter.chunks.map((chunk) => ({
-                chapterId: chapter.id,
-                chunkIndex: chunk.chunkIndex,
-                content: chunk.content,
-                charCount: chunk.charCount,
-              })),
+              data: buildChunkRows(chapter.id, chapter.content, chapter.chunks),
+            });
+          } else if (chapter.content) {
+            await tx.chapterChunk.createMany({
+              data: buildChunkRows(chapter.id, chapter.content),
             });
           }
 
@@ -213,6 +233,275 @@ export class BackupService {
       bookmarksImported: payload.bookmarks?.length ?? 0,
     };
   }
+
+  private async mergeBackup(
+    payload: BackupPayload,
+  ): Promise<ImportBackupResponse> {
+    const affectedBookIds = new Set<string>();
+    const bookIdMap = new Map<string, string>();
+    const chapterIdMap = new Map<string, string>();
+
+    await this.prisma.$transaction(async (tx) => {
+      for (const book of payload.books) {
+        const [existingById, existingByPath] = await Promise.all([
+          tx.book.findUnique({
+            where: { id: book.id },
+            select: { id: true },
+          }),
+          tx.book.findUnique({
+            where: { path: book.path },
+            select: { id: true },
+          }),
+        ]);
+        const targetBookId = existingById?.id ?? existingByPath?.id ?? book.id;
+        const canUpdatePath =
+          !existingByPath || existingByPath.id === targetBookId;
+
+        bookIdMap.set(book.id, targetBookId);
+        affectedBookIds.add(targetBookId);
+
+        if (existingById || existingByPath) {
+          await tx.book.update({
+            where: { id: targetBookId },
+            data: {
+              title: book.title,
+              ...(canUpdatePath ? { path: book.path } : {}),
+              description: book.description ?? null,
+              tags: JSON.stringify(book.tags ?? []),
+              coverImage: book.coverImage ?? null,
+              lastRead: toDate(book.lastRead),
+            },
+          });
+        } else {
+          await tx.book.create({
+            data: {
+              id: targetBookId,
+              title: book.title,
+              path: book.path,
+              description: book.description ?? null,
+              tags: JSON.stringify(book.tags ?? []),
+              coverImage: book.coverImage ?? null,
+              lastRead: toDate(book.lastRead),
+              createdAt: book.createdAt ? toDate(book.createdAt) : undefined,
+            },
+          });
+        }
+
+        for (const chapter of book.chapters ?? []) {
+          const targetChapterId = await this.upsertMergedChapter(
+            tx,
+            targetBookId,
+            chapter,
+          );
+          chapterIdMap.set(chapter.id, targetChapterId);
+        }
+      }
+
+      for (const bookmark of payload.bookmarks ?? []) {
+        const targetBookId = bookIdMap.get(bookmark.bookId);
+        const targetChapterId = chapterIdMap.get(bookmark.chapterId);
+
+        if (!targetBookId || !targetChapterId) {
+          continue;
+        }
+
+        await tx.bookmark.upsert({
+          where: { id: bookmark.id },
+          update: {
+            bookId: targetBookId,
+            chapterId: targetChapterId,
+            note: bookmark.note,
+            excerpt: bookmark.excerpt ?? null,
+            position: bookmark.position,
+          },
+          create: {
+            id: bookmark.id,
+            bookId: targetBookId,
+            chapterId: targetChapterId,
+            note: bookmark.note,
+            excerpt: bookmark.excerpt ?? null,
+            position: bookmark.position,
+            createdAt: toDate(bookmark.createdAt),
+          },
+        });
+      }
+
+      if (payload.aiConfig) {
+        await this.upsertAiConfig(tx, payload);
+      }
+    });
+
+    for (const bookId of affectedBookIds) {
+      await this.contentIndex.syncBook(bookId);
+    }
+
+    const chaptersImported = payload.books.reduce(
+      (total, book) => total + (book.chapters?.length ?? 0),
+      0,
+    );
+
+    return {
+      success: true,
+      message: `Merged ${payload.books.length} books, ${chaptersImported} chapters`,
+      booksImported: payload.books.length,
+      chaptersImported,
+      bookmarksImported: payload.bookmarks?.length ?? 0,
+    };
+  }
+
+  private async upsertMergedChapter(
+    tx: Prisma.TransactionClient,
+    bookId: string,
+    chapter: BackupPayload['books'][number]['chapters'][number],
+  ) {
+    const existingById = await tx.chapter.findUnique({
+      where: { id: chapter.id },
+      select: { id: true },
+    });
+    const existingByFileName = existingById
+      ? null
+      : await tx.chapter.findUnique({
+          where: {
+            bookId_fileName: {
+              bookId,
+              fileName: chapter.fileName,
+            },
+          },
+          select: { id: true },
+        });
+    const targetChapterId =
+      existingById?.id ?? existingByFileName?.id ?? chapter.id;
+    const chapterData = {
+      bookId,
+      title: chapter.title,
+      fileName: chapter.fileName,
+      content: chapter.content ?? null,
+      orderIndex: chapter.orderIndex,
+      isRead: chapter.isRead,
+      progress: chapter.progress,
+    };
+
+    if (existingById || existingByFileName) {
+      await tx.chapter.update({
+        where: { id: targetChapterId },
+        data: chapterData,
+      });
+    } else {
+      await tx.chapter.create({
+        data: {
+          id: targetChapterId,
+          ...chapterData,
+          createdAt: chapter.createdAt ? toDate(chapter.createdAt) : undefined,
+        },
+      });
+    }
+
+    await tx.vectorData.deleteMany({
+      where: { chapterId: targetChapterId },
+    });
+    await tx.chapterChunk.deleteMany({
+      where: { chapterId: targetChapterId },
+    });
+
+    const chunkRows = buildChunkRows(
+      targetChapterId,
+      chapter.content,
+      chapter.chunks,
+    );
+    if (chunkRows.length) {
+      await tx.chapterChunk.createMany({ data: chunkRows });
+    }
+
+    if (chapter.readingProgress) {
+      await tx.readingProgress.upsert({
+        where: { chapterId: targetChapterId },
+        update: {
+          percentage: chapter.readingProgress.percentage,
+          scrollPosition: chapter.readingProgress.scrollPosition,
+          readingSeconds: chapter.readingProgress.readingSeconds ?? 0,
+        },
+        create: {
+          id: chapter.readingProgress.id,
+          chapterId: targetChapterId,
+          percentage: chapter.readingProgress.percentage,
+          scrollPosition: chapter.readingProgress.scrollPosition,
+          readingSeconds: chapter.readingProgress.readingSeconds ?? 0,
+        },
+      });
+    }
+
+    return targetChapterId;
+  }
+
+  private upsertAiConfig(tx: Prisma.TransactionClient, payload: BackupPayload) {
+    const aiConfig = payload.aiConfig;
+    if (!aiConfig) {
+      return Promise.resolve();
+    }
+
+    return tx.aiConfig.upsert({
+      where: { id: DEFAULT_AI_CONFIG_ID },
+      update: {
+        mode: aiConfig.mode,
+        baseUrl: aiConfig.baseUrl ?? null,
+        model: aiConfig.model ?? null,
+        apiKey: encryptSecret(aiConfig.apiKey),
+        embeddingProvider:
+          aiConfig.embeddingProvider === 'openai-compatible'
+            ? 'openai-compatible'
+            : 'local',
+        embeddingModel: aiConfig.embeddingModel ?? null,
+        ragSourceCount: aiConfig.ragSourceCount ?? 5,
+        ragContextChars: aiConfig.ragContextChars ?? 12000,
+        ragExcerptChars: aiConfig.ragExcerptChars ?? 520,
+      },
+      create: {
+        id: DEFAULT_AI_CONFIG_ID,
+        mode: aiConfig.mode,
+        baseUrl: aiConfig.baseUrl ?? null,
+        model: aiConfig.model ?? null,
+        apiKey: encryptSecret(aiConfig.apiKey),
+        embeddingProvider:
+          aiConfig.embeddingProvider === 'openai-compatible'
+            ? 'openai-compatible'
+            : 'local',
+        embeddingModel: aiConfig.embeddingModel ?? null,
+        ragSourceCount: aiConfig.ragSourceCount ?? 5,
+        ragContextChars: aiConfig.ragContextChars ?? 12000,
+        ragExcerptChars: aiConfig.ragExcerptChars ?? 520,
+      },
+    });
+  }
+}
+
+function normalizeImportRequest(request: BackupPayload | ImportBackupRequest) {
+  const maybeRequest = request as Partial<ImportBackupRequest>;
+  const payload = maybeRequest.payload ?? (request as BackupPayload);
+  const mode: ImportBackupMode = maybeRequest.payload
+    ? maybeRequest.mode === 'replace'
+      ? 'replace'
+      : 'merge'
+    : 'replace';
+
+  return { payload, mode };
+}
+
+function buildChunkRows(
+  chapterId: string,
+  content?: string | null,
+  chunks?: BackupPayload['books'][number]['chapters'][number]['chunks'],
+) {
+  const sourceChunks =
+    chunks?.length && chunks.every((chunk) => typeof chunk.content === 'string')
+      ? chunks
+      : chunkMarkdownContent(content ?? '');
+
+  return sourceChunks.map((chunk) => ({
+    chapterId,
+    chunkIndex: chunk.chunkIndex,
+    content: chunk.content,
+    charCount: chunk.charCount,
+  }));
 }
 
 function parseTags(value?: string | null) {

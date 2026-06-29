@@ -6,6 +6,8 @@ import Link from "next/link";
 import {
   AlertCircle,
   ArchiveRestore,
+  CheckCircle2,
+  Database,
   Download,
   FileJson,
   ImagePlus,
@@ -14,7 +16,13 @@ import {
   ScanLine,
   Trash2,
 } from "lucide-react";
-import { BackupPayload, Book, Bookmark } from "@/types";
+import {
+  BackupPayload,
+  Book,
+  Bookmark,
+  ImportBackupMode,
+  SearchIndexStatus,
+} from "@/types";
 import {
   deleteBook,
   deleteBookmark,
@@ -22,7 +30,9 @@ import {
   getBookAssetUrl,
   getBookmarks,
   getBooks,
+  getSearchIndexStatus,
   importBackup,
+  rescanKnownBooks,
   scanDirectory,
   updateBook,
 } from "@/lib/api";
@@ -36,6 +46,8 @@ export function ManagementView() {
   const { t } = useI18n();
   const [books, setBooks] = React.useState<Book[]>([]);
   const [bookmarks, setBookmarks] = React.useState<Bookmark[]>([]);
+  const [indexStatus, setIndexStatus] =
+    React.useState<SearchIndexStatus | null>(null);
   const [selectedBookId, setSelectedBookId] = React.useState("");
   const [scanPath, setScanPath] = React.useState("");
   const [form, setForm] = React.useState({
@@ -47,7 +59,10 @@ export function ManagementView() {
   const [isLoading, setIsLoading] = React.useState(true);
   const [isSaving, setIsSaving] = React.useState(false);
   const [isScanning, setIsScanning] = React.useState(false);
+  const [isRescanningKnown, setIsRescanningKnown] = React.useState(false);
   const [isImporting, setIsImporting] = React.useState(false);
+  const [importMode, setImportMode] =
+    React.useState<ImportBackupMode>("merge");
   const [status, setStatus] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -58,12 +73,14 @@ export function ManagementView() {
     setError(null);
 
     try {
-      const [nextBooks, nextBookmarks] = await Promise.all([
+      const [nextBooks, nextBookmarks, nextIndexStatus] = await Promise.all([
         getBooks(),
         getBookmarks(),
+        getSearchIndexStatus().catch(() => null),
       ]);
       setBooks(nextBooks);
       setBookmarks(nextBookmarks);
+      setIndexStatus(nextIndexStatus);
       setSelectedBookId((current) => current || nextBooks[0]?.id || "");
     } catch (err) {
       setError(err instanceof Error ? err.message : t("management.loadFailed"));
@@ -120,6 +137,24 @@ export function ManagementView() {
       setError(err instanceof Error ? err.message : t("library.scanFailed"));
     } finally {
       setIsScanning(false);
+    }
+  };
+
+  const handleRescanKnownBooks = async () => {
+    setIsRescanningKnown(true);
+    setStatus(null);
+    setError(null);
+
+    try {
+      const result = await rescanKnownBooks();
+      setStatus(result.message);
+      await refreshLibrary();
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : t("management.rescanKnownFailed"),
+      );
+    } finally {
+      setIsRescanningKnown(false);
     }
   };
 
@@ -215,7 +250,7 @@ export function ManagementView() {
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `juejin-flow-backup-${new Date()
+      link.download = `moxu-backup-${new Date()
         .toISOString()
         .slice(0, 10)}.json`;
       link.click();
@@ -239,7 +274,7 @@ export function ManagementView() {
 
     try {
       const payload = JSON.parse(await file.text()) as BackupPayload;
-      const result = await importBackup(payload);
+      const result = await importBackup(payload, importMode);
       setStatus(result.message);
       setSelectedBookId("");
       await refreshLibrary();
@@ -265,8 +300,8 @@ export function ManagementView() {
   const coverSrc = selectedBook ? resolveCoverImage(selectedBook, form.coverImage) : "";
 
   return (
-    <div className="mx-auto max-w-6xl space-y-8">
-      <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+    <div className="mx-auto flex h-full min-h-0 w-full max-w-[88rem] flex-col gap-6">
+      <div className="flex shrink-0 flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">
             {t("management.title")}
@@ -276,7 +311,7 @@ export function ManagementView() {
           </p>
         </div>
 
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={handleExport}
@@ -285,6 +320,33 @@ export function ManagementView() {
             <Download className="h-4 w-4" />
             {t("management.export")}
           </button>
+          <div
+            className="flex rounded-md border bg-card p-1"
+            aria-label={t("management.importMode")}
+          >
+            {(["merge", "replace"] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setImportMode(mode)}
+                className={cn(
+                  "h-8 rounded-sm px-3 text-xs font-medium transition-colors",
+                  importMode === mode
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+                )}
+                title={
+                  mode === "merge"
+                    ? t("management.importMergeHint")
+                    : t("management.importReplaceHint")
+                }
+              >
+                {mode === "merge"
+                  ? t("management.importMerge")
+                  : t("management.importReplace")}
+              </button>
+            ))}
+          </div>
           <label className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-md border bg-card px-3 text-sm font-medium transition-colors hover:bg-secondary">
             {isImporting ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -305,7 +367,7 @@ export function ManagementView() {
       {(status || error) && (
         <div
           className={cn(
-            "flex items-start gap-2 rounded-md border px-4 py-3 text-sm",
+            "flex shrink-0 items-start gap-2 rounded-md border px-4 py-3 text-sm",
             error
               ? "border-destructive/40 bg-destructive/10 text-destructive"
               : "border-primary/30 bg-primary/10 text-primary",
@@ -318,7 +380,7 @@ export function ManagementView() {
 
       <form
         onSubmit={handleScan}
-        className="flex flex-col gap-3 rounded-lg border bg-card p-4 shadow-sm md:flex-row md:items-center"
+        className="flex shrink-0 flex-col gap-3 rounded-lg border bg-card p-4 shadow-sm md:flex-row md:items-center"
       >
         <div className="flex min-w-44 items-center gap-2 font-semibold">
           <ScanLine className="h-4 w-4 text-primary" />
@@ -343,15 +405,32 @@ export function ManagementView() {
           )}
           {isScanning ? t("library.scanning") : t("library.scan")}
         </button>
+        <button
+          type="button"
+          onClick={handleRescanKnownBooks}
+          disabled={isRescanningKnown}
+          className="inline-flex h-10 items-center justify-center gap-2 rounded-md border bg-background px-3 text-sm font-medium transition-colors hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {isRescanningKnown ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <ScanLine className="h-4 w-4" />
+          )}
+          {isRescanningKnown
+            ? t("management.rescanningKnown")
+            : t("management.rescanKnown")}
+        </button>
       </form>
 
+      {indexStatus && <IndexStatusCard status={indexStatus} />}
+
       {isLoading ? (
-        <div className="flex min-h-64 items-center justify-center rounded-lg border bg-card">
+        <div className="flex min-h-0 flex-1 items-center justify-center rounded-lg border bg-card">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
       ) : (
-        <div className="grid gap-6 lg:grid-cols-[18rem_minmax(0,1fr)]">
-          <aside className="space-y-2">
+        <div className="grid min-h-0 flex-1 gap-5 lg:grid-cols-[15rem_minmax(0,1fr)]">
+          <aside className="management-book-list scrollbar-soft min-h-0 space-y-2 overflow-y-auto pr-2">
             {books.length > 0 ? (
               books.map((book) => (
                 <button
@@ -378,9 +457,9 @@ export function ManagementView() {
             )}
           </aside>
 
-          <div className="space-y-6">
-            <section className="rounded-lg border bg-card p-5 shadow-sm">
-              <div className="mb-5 flex items-center justify-between gap-3">
+          <div className="scrollbar-soft grid min-h-0 gap-5 overflow-y-auto pr-1 xl:grid-cols-[minmax(24rem,1fr)_minmax(16rem,0.72fr)] xl:overflow-hidden">
+            <section className="scrollbar-soft min-h-0 overflow-y-auto rounded-lg border bg-card p-4 shadow-sm">
+              <div className="mb-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
                 <div>
                   <h2 className="font-semibold">{t("management.metadata")}</h2>
                   <p className="mt-1 text-sm text-muted-foreground">
@@ -391,7 +470,7 @@ export function ManagementView() {
                   <button
                     type="button"
                     onClick={handleDeleteBook}
-                    className="inline-flex h-9 items-center gap-2 rounded-md border border-destructive/40 px-3 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10"
+                    className="inline-flex h-9 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-md border border-destructive/40 px-3 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10"
                   >
                     <Trash2 className="h-4 w-4" />
                     {t("management.deleteBook")}
@@ -400,8 +479,8 @@ export function ManagementView() {
               </div>
 
               {selectedBook ? (
-                <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_14rem]">
-                  <div className="space-y-4">
+                <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_11rem]">
+                  <div className="space-y-3">
                     <label className="block">
                       <div className="mb-2 text-sm font-medium">
                         {t("management.bookTitle")}
@@ -430,7 +509,7 @@ export function ManagementView() {
                             description: event.target.value,
                           }))
                         }
-                        rows={4}
+                        rows={3}
                         className="w-full resize-none rounded-md border bg-background px-3 py-2 text-sm outline-none transition-all focus:ring-2 focus:ring-primary/50"
                       />
                     </label>
@@ -497,7 +576,7 @@ export function ManagementView() {
                     </button>
                   </div>
 
-                  <div className="overflow-hidden rounded-lg border bg-background">
+                  <div className="w-full max-w-40 overflow-hidden rounded-lg border bg-background md:max-w-none">
                     <div className="flex aspect-[3/4] items-center justify-center bg-muted">
                       {coverSrc ? (
                         <Image
@@ -522,9 +601,9 @@ export function ManagementView() {
               )}
             </section>
 
-            <section className="rounded-lg border bg-card p-5 shadow-sm">
-              <h2 className="font-semibold">{t("management.bookmarks")}</h2>
-              <div className="mt-4 space-y-3">
+            <section className="flex min-h-0 flex-col rounded-lg border bg-card p-4 shadow-sm">
+              <h2 className="shrink-0 font-semibold">{t("management.bookmarks")}</h2>
+              <div className="scrollbar-soft mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto pr-2">
                 {bookmarks.length > 0 ? (
                   bookmarks.map((bookmark) => (
                     <div
@@ -569,6 +648,85 @@ export function ManagementView() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function IndexStatusCard({ status }: { status: SearchIndexStatus }) {
+  const { t } = useI18n();
+  const isReady = status.isFtsReady && status.isVectorReady;
+  const embeddingLabel =
+    status.embeddingProvider && status.embeddingModel
+      ? `${status.embeddingProvider} / ${status.embeddingModel}`
+      : t("management.unavailable");
+
+  return (
+    <section className="shrink-0 rounded-lg border bg-card p-4 shadow-sm">
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-secondary text-primary">
+            <Database className="h-5 w-5" />
+          </div>
+          <div className="min-w-0">
+            <h2 className="font-semibold">{t("management.indexStatus")}</h2>
+            <div className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
+              {isReady ? (
+                <CheckCircle2 className="h-4 w-4 text-primary" />
+              ) : (
+                <AlertCircle className="h-4 w-4 text-accent" />
+              )}
+              <span>{isReady ? t("management.indexReady") : t("management.indexBuilding")}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-3 md:min-w-[34rem]">
+          <IndexMetric
+            label={t("management.ftsIndex")}
+            value={t("management.chunksIndexed", {
+              indexed: status.ftsChunks,
+              total: status.totalChunks,
+            })}
+            ready={status.isFtsReady}
+          />
+          <IndexMetric
+            label={t("management.vectorIndex")}
+            value={t("management.chunksIndexed", {
+              indexed: status.vectorChunks,
+              total: status.totalChunks,
+            })}
+            ready={status.isVectorReady}
+          />
+          <IndexMetric label={t("management.embedding")} value={embeddingLabel} />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function IndexMetric({
+  label,
+  value,
+  ready,
+}: {
+  label: string;
+  value: string;
+  ready?: boolean;
+}) {
+  return (
+    <div className="rounded-md border bg-background px-3 py-2">
+      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+        <span>{label}</span>
+        {ready !== undefined && (
+          <span
+            className={cn(
+              "h-2 w-2 rounded-full",
+              ready ? "bg-primary" : "bg-accent",
+            )}
+          />
+        )}
+      </div>
+      <div className="mt-1 truncate text-sm font-medium">{value}</div>
     </div>
   );
 }

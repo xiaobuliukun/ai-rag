@@ -11,6 +11,7 @@ describe('ScanService', () => {
   let tempDir: string;
   const prisma = {
     book: {
+      findMany: jest.fn(),
       upsert: jest.fn(),
     },
     chapter: {
@@ -138,6 +139,48 @@ describe('ScanService', () => {
       },
     });
     expect(prisma.chapter.upsert).not.toHaveBeenCalled();
+    expect(contentIndex.syncBook).toHaveBeenCalledWith('book-1');
+  });
+
+  it('rejects paths that are not directories', async () => {
+    const filePath = path.join(tempDir, 'not-a-library.md');
+    await fs.outputFile(filePath, '# Not a library');
+
+    await expect(service.scanDirectory(filePath)).rejects.toThrow(
+      `Path is not a directory: ${filePath}`,
+    );
+    expect(prisma.book.upsert).not.toHaveBeenCalled();
+    expect(contentIndex.syncBook).not.toHaveBeenCalled();
+  });
+
+  it('rescans known book paths and skips missing directories', async () => {
+    const bookPath = path.join(tempDir, 'Known Book');
+    const missingPath = path.join(tempDir, 'Missing Book');
+    await fs.outputFile(path.join(bookPath, '01-intro.md'), '# Intro');
+
+    prisma.book.findMany.mockResolvedValue([
+      { path: bookPath, title: 'Custom Known Title' },
+      { path: missingPath, title: 'Missing Book' },
+    ]);
+    prisma.book.upsert.mockResolvedValue({ id: 'book-1' });
+    prisma.chapter.upsert.mockResolvedValue({ id: 'chapter-1' });
+
+    const result = await service.rescanKnownBooks();
+
+    expect(result).toMatchObject({
+      success: true,
+      booksScanned: 1,
+      chaptersScanned: 1,
+      skippedBooks: 1,
+    });
+    expect(prisma.book.upsert).toHaveBeenCalledWith({
+      where: { path: bookPath },
+      update: { title: 'Custom Known Title' },
+      create: {
+        title: 'Custom Known Title',
+        path: bookPath,
+      },
+    });
     expect(contentIndex.syncBook).toHaveBeenCalledWith('book-1');
   });
 });

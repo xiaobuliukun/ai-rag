@@ -8,10 +8,12 @@ import {
   BackupPayload,
   Chapter,
   CreateBookmarkRequest,
+  ImportBackupMode,
   ImportBackupResponse,
   LibraryStats,
   PersistedAiConfig,
   ScanResponse,
+  SearchIndexStatus,
   SearchResult,
   SearchResultType,
   UpdateBookRequest,
@@ -118,6 +120,12 @@ export function scanDirectory(path: string) {
   });
 }
 
+export function rescanKnownBooks() {
+  return fetchJson<ScanResponse>("/scan/rescan-known", {
+    method: "POST",
+  });
+}
+
 export function searchLibrary(
   query: string,
   bookId?: string,
@@ -132,6 +140,12 @@ export function searchLibrary(
   }
 
   return fetchJson<SearchResult[]>(`/search?${params.toString()}`, {
+    cache: "no-store",
+  });
+}
+
+export function getSearchIndexStatus() {
+  return fetchJson<SearchIndexStatus>("/search/index-status", {
     cache: "no-store",
   });
 }
@@ -193,10 +207,13 @@ export function exportBackup() {
   return fetchJson<BackupPayload>("/backup/export", { cache: "no-store" });
 }
 
-export function importBackup(payload: BackupPayload) {
+export function importBackup(
+  payload: BackupPayload,
+  mode: ImportBackupMode = "merge",
+) {
   return fetchJson<ImportBackupResponse>("/backup/import", {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ payload, mode }),
   });
 }
 

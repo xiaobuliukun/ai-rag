@@ -191,7 +191,7 @@ export function AIAssistantPanel() {
   return (
     <aside
       className={cn(
-        "fixed right-0 top-0 z-40 flex h-screen max-w-[calc(100vw-1rem)] flex-col border-l bg-card shadow-xl transition-transform duration-300",
+        "fixed right-0 top-0 z-40 flex h-screen max-w-[calc(100vw-1rem)] flex-col border-l bg-card/95 shadow-2xl backdrop-blur transition-transform duration-300",
         isAIPanelOpen ? "translate-x-0" : "translate-x-full",
       )}
       style={{ width: aiPanelWidth }}
@@ -247,7 +247,7 @@ export function AIAssistantPanel() {
               type="button"
               onClick={() => void submit(t(promptKey))}
               disabled={isLoading}
-              className="rounded-md border bg-background px-3 py-1.5 text-xs font-medium transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
+              className="rounded-md border bg-background px-3 py-1.5 text-xs font-medium transition-colors hover:border-primary/50 hover:bg-secondary hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
             >
               {t(promptKey)}
             </button>
@@ -255,9 +255,9 @@ export function AIAssistantPanel() {
         </div>
       </div>
 
-      <div ref={messagesRef} className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
+      <div ref={messagesRef} className="scrollbar-soft flex-1 space-y-4 overflow-y-auto px-4 py-4">
         {messages.length === 0 && (
-          <div className="rounded-lg border bg-background p-4 text-sm text-muted-foreground">
+          <div className="rounded-lg border bg-background/80 p-4 text-sm text-muted-foreground">
             {readingContext?.selectedText
               ? t("ai.selectionCaptured")
               : readingContext?.chapterTitle
@@ -284,7 +284,7 @@ export function AIAssistantPanel() {
                 "max-w-[82%] rounded-lg px-3 py-2 text-sm leading-6",
                 message.role === "user"
                   ? "bg-primary text-primary-foreground"
-                  : "border bg-background",
+                  : "border bg-background/80",
               )}
             >
               {message.content ? (

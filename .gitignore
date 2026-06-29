@@ -38,6 +38,7 @@ coverage
 *.pem
 *.tsbuildinfo
 .trae
+.codegraph/
 
 # prisma
 packages/server/generated/prisma

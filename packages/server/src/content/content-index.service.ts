@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import type { SearchIndexStatus } from '@juejin-flow/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { decryptSecret } from '../ai/secrets';
 import {
@@ -66,6 +67,44 @@ export class ContentIndexService {
   private syncAllPromise?: Promise<void>;
 
   constructor(private prisma: PrismaService) {}
+
+  async getStatus(): Promise<SearchIndexStatus> {
+    const [
+      totalBooks,
+      totalChapters,
+      totalChunks,
+      ftsRows,
+      vectorChunks,
+      vectorSample,
+    ] = await Promise.all([
+      this.prisma.book.count(),
+      this.prisma.chapter.count(),
+      this.prisma.chapterChunk.count(),
+      this.prisma.$queryRawUnsafe<CountRow[]>(
+        'SELECT count(*) AS "count" FROM "ChapterChunkFts"',
+      ),
+      this.prisma.vectorData.count(),
+      this.prisma.vectorData.findFirst({
+        select: {
+          metadata: true,
+        },
+      }),
+    ]);
+    const ftsChunks = toCount(ftsRows[0]?.count);
+    const metadata = parseVectorMetadata(vectorSample?.metadata);
+
+    return {
+      totalBooks,
+      totalChapters,
+      totalChunks,
+      ftsChunks,
+      vectorChunks,
+      isFtsReady: totalChunks > 0 && ftsChunks >= totalChunks,
+      isVectorReady: totalChunks > 0 && vectorChunks >= totalChunks,
+      embeddingProvider: metadata.embeddingProvider,
+      embeddingModel: metadata.embeddingModel,
+    };
+  }
 
   async syncBook(bookId: string) {
     await this.prisma.$executeRawUnsafe(
@@ -567,7 +606,10 @@ export function createHighlightedSnippet(content: string, query: string) {
   };
 }
 
-export function parseVectorMetadata(value?: string | null) {
+export function parseVectorMetadata(value?: string | null): {
+  embeddingProvider?: EmbeddingProvider;
+  embeddingModel?: string;
+} {
   if (!value) {
     return {};
   }
@@ -594,6 +636,10 @@ export function parseVectorMetadata(value?: string | null) {
   } catch {
     return {};
   }
+}
+
+function toCount(value: number | bigint | undefined) {
+  return Number(value ?? 0);
 }
 
 function extractHighlightTerms(query: string) {

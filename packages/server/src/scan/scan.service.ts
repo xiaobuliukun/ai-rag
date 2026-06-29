@@ -23,9 +23,7 @@ export class ScanService {
   async scanDirectory(rootDir: string) {
     this.logger.log(`Scanning directory: ${rootDir}`);
 
-    if (!fs.existsSync(rootDir)) {
-      throw new Error(`Directory not found: ${rootDir}`);
-    }
+    await this.assertDirectory(rootDir);
 
     const entries = await fs.readdir(rootDir, { withFileTypes: true });
 
@@ -50,6 +48,63 @@ export class ScanService {
       booksScanned,
       chaptersScanned,
     };
+  }
+
+  async rescanKnownBooks() {
+    const books = await this.prisma.book.findMany({
+      select: {
+        path: true,
+        title: true,
+      },
+      orderBy: {
+        path: 'asc',
+      },
+    });
+
+    let booksScanned = 0;
+    let chaptersScanned = 0;
+    let skippedBooks = 0;
+
+    for (const book of books) {
+      if (!(await this.isDirectory(book.path))) {
+        skippedBooks += 1;
+        continue;
+      }
+
+      const chapterCount = await this.processBook(book.path, book.title);
+      booksScanned += 1;
+      chaptersScanned += chapterCount;
+    }
+
+    return {
+      success: true,
+      message: `Rescan completed: ${booksScanned} books, ${chaptersScanned} chapters${
+        skippedBooks > 0 ? `, ${skippedBooks} skipped` : ''
+      }`,
+      booksScanned,
+      chaptersScanned,
+      skippedBooks,
+    };
+  }
+
+  private async assertDirectory(directoryPath: string) {
+    if (!fs.existsSync(directoryPath)) {
+      throw new Error(`Directory not found: ${directoryPath}`);
+    }
+
+    const stats = await fs.stat(directoryPath);
+    if (!stats.isDirectory()) {
+      throw new Error(`Path is not a directory: ${directoryPath}`);
+    }
+  }
+
+  private async isDirectory(directoryPath: string) {
+    if (!fs.existsSync(directoryPath)) {
+      return false;
+    }
+
+    const stats = await fs.stat(directoryPath);
+    return stats.isDirectory();
   }
 
   private async processBook(bookPath: string, bookTitle: string) {

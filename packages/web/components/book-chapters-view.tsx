@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { CheckCircle2, Circle, FileText } from "lucide-react";
+import { CheckCircle2, Circle, FileText, FolderOpen } from "lucide-react";
 import { Book } from "@/types";
+import { buildChapterTree, ChapterTreeNode } from "@/lib/chapters";
 import { useI18n } from "@/lib/i18n";
 
 interface BookChaptersViewProps {
@@ -12,6 +13,7 @@ interface BookChaptersViewProps {
 export function BookChaptersView({ book }: BookChaptersViewProps) {
   const { t } = useI18n();
   const chapters = book.chapters ?? [];
+  const chapterTree = buildChapterTree(chapters);
 
   return (
     <div className="max-w-3xl mx-auto py-12 px-6">
@@ -26,30 +28,9 @@ export function BookChaptersView({ book }: BookChaptersViewProps) {
       </div>
 
       <div className="space-y-4">
-        {chapters.length > 0 ? (
-          chapters.map((chapter) => (
-            <Link
-              key={chapter.id}
-              href={`/book/${book.id}/${chapter.id}`}
-              className="block p-4 border rounded-lg hover:bg-accent/10 hover:border-accent transition-colors group"
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-full bg-secondary flex items-center justify-center text-muted-foreground group-hover:text-accent group-hover:bg-accent/20 transition-colors">
-                    <FileText className="w-4 h-4" />
-                  </div>
-                  <span className="font-medium text-lg">{chapter.title}</span>
-                </div>
-                <span className="flex items-center gap-2 text-sm text-muted-foreground">
-                  {chapter.isRead ? (
-                    <CheckCircle2 className="h-4 w-4 text-primary" />
-                  ) : (
-                    <Circle className="h-4 w-4" />
-                  )}
-                  {Math.round(chapter.progress)}%
-                </span>
-              </div>
-            </Link>
+        {chapterTree.length > 0 ? (
+          chapterTree.map((node) => (
+            <ChapterTreeItem key={node.id} bookId={book.id} node={node} />
           ))
         ) : (
           <div className="rounded-lg border bg-card p-8 text-center text-muted-foreground">
@@ -58,5 +39,55 @@ export function BookChaptersView({ book }: BookChaptersViewProps) {
         )}
       </div>
     </div>
+  );
+}
+
+function ChapterTreeItem({
+  bookId,
+  node,
+}: {
+  bookId: string;
+  node: ChapterTreeNode;
+}) {
+  if (!node.chapter) {
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center gap-3 px-1 text-sm font-semibold text-muted-foreground">
+          <FolderOpen className="h-4 w-4 text-primary" />
+          <span>{node.title}</span>
+        </div>
+        <div className="mt-3 space-y-3 border-l pl-4">
+          {node.children.map((child) => (
+            <ChapterTreeItem key={child.id} bookId={bookId} node={child} />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const chapter = node.chapter;
+
+  return (
+    <Link
+      href={`/book/${bookId}/${chapter.id}`}
+      className="block rounded-lg border bg-card p-4 transition-colors hover:border-accent hover:bg-accent/10"
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-secondary text-muted-foreground transition-colors">
+            <FileText className="h-4 w-4" />
+          </div>
+          <span className="truncate text-lg font-medium">{chapter.title}</span>
+        </div>
+        <span className="flex shrink-0 items-center gap-2 text-sm text-muted-foreground">
+          {chapter.isRead ? (
+            <CheckCircle2 className="h-4 w-4 text-primary" />
+          ) : (
+            <Circle className="h-4 w-4" />
+          )}
+          {Math.round(chapter.progress)}%
+        </span>
+      </div>
+    </Link>
   );
 }

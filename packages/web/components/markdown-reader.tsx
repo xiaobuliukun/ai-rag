@@ -3,6 +3,7 @@
 import * as React from "react";
 import Image from "next/image";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Check, Copy } from "lucide-react";
 import { ComponentPropsWithoutRef, CSSProperties } from "react";
 import { cn } from "@/lib/utils";
@@ -30,7 +31,43 @@ export function MarkdownReader({
         style={style}
       >
         <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
           components={{
+            table({ children }) {
+              return (
+                <div className="my-6 overflow-x-auto rounded-lg border">
+                  <table className="m-0 w-full border-collapse text-sm">
+                    {children}
+                  </table>
+                </div>
+              );
+            },
+            th({ children, ...props }) {
+              return (
+                <th
+                  className="border-b bg-secondary px-3 py-2 text-left font-semibold"
+                  {...props}
+                >
+                  {children}
+                </th>
+              );
+            },
+            td({ children, ...props }) {
+              return (
+                <td className="border-b px-3 py-2 align-top" {...props}>
+                  {children}
+                </td>
+              );
+            },
+            input({ className, ...props }) {
+              return (
+                <input
+                  className={cn("mr-2 align-middle accent-primary", className)}
+                  {...props}
+                  disabled
+                />
+              );
+            },
             pre({ children }) {
               return <>{children}</>;
             },

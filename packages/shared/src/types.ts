@@ -63,6 +63,7 @@ export interface ScanResponse {
   message: string;
   booksScanned?: number;
   chaptersScanned?: number;
+  skippedBooks?: number;
 }
 
 export interface UpdateProgressRequest {
@@ -118,6 +119,18 @@ export interface SearchResult {
   bookId: string;
   chapterId?: string;
   bookTitle?: string;
+}
+
+export interface SearchIndexStatus {
+  totalBooks: number;
+  totalChapters: number;
+  totalChunks: number;
+  ftsChunks: number;
+  vectorChunks: number;
+  isFtsReady: boolean;
+  isVectorReady: boolean;
+  embeddingProvider?: AiEmbeddingProvider;
+  embeddingModel?: string;
 }
 
 export interface AiRuntimeConfig {
@@ -211,6 +224,13 @@ export interface BackupPayload {
   >;
   bookmarks: Bookmark[];
   aiConfig?: PersistedAiConfig | null;
+}
+
+export type ImportBackupMode = 'merge' | 'replace';
+
+export interface ImportBackupRequest {
+  payload: BackupPayload;
+  mode?: ImportBackupMode;
 }
 
 export interface ImportBackupResponse {
