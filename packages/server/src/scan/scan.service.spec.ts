@@ -124,6 +124,32 @@ describe('ScanService', () => {
     expect(contentIndex.syncBook).toHaveBeenCalledWith('book-1');
   });
 
+  it('reports scan and index progress', async () => {
+    const bookPath = path.join(tempDir, 'Book A');
+    await fs.outputFile(path.join(bookPath, '01-intro.md'), '# Intro');
+    const progressEvents: Array<{ phase?: string; currentBook?: string }> = [];
+
+    prisma.book.upsert.mockResolvedValue({ id: 'book-1' });
+    prisma.chapter.upsert.mockResolvedValue({ id: 'chapter-1' });
+
+    await service.scanDirectory(tempDir, (progress) => {
+      progressEvents.push({
+        phase: progress.phase,
+        currentBook: progress.currentBook,
+      });
+    });
+
+    expect(progressEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ phase: 'scanning' }),
+        expect.objectContaining({
+          phase: 'indexing',
+          currentBook: 'Book A',
+        }),
+      ]),
+    );
+  });
+
   it('removes all chapters when a scanned book has no markdown files', async () => {
     const bookPath = path.join(tempDir, 'Empty Book');
     await fs.outputFile(path.join(bookPath, 'notes.txt'), 'skip me');

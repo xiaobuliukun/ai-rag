@@ -158,10 +158,16 @@ export interface AiContext {
   selectedText?: string;
 }
 
+export interface AiChatHistoryMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 export interface AiChatRequest {
   message: string;
   context?: AiContext;
   config?: AiRuntimeConfig;
+  history?: AiChatHistoryMessage[];
 }
 
 export interface AiSource {
@@ -224,6 +230,12 @@ export interface BackupPayload {
   >;
   bookmarks: Bookmark[];
   aiConfig?: PersistedAiConfig | null;
+  clientPreferences?: ClientPreferencesBackup | null;
+}
+
+export interface ClientPreferencesBackup {
+  moxuPreferences?: unknown;
+  theme?: string | null;
 }
 
 export type ImportBackupMode = 'merge' | 'replace';
@@ -239,4 +251,33 @@ export interface ImportBackupResponse {
   booksImported: number;
   chaptersImported: number;
   bookmarksImported: number;
+}
+
+export type ScanJobPhase =
+  | 'queued'
+  | 'scanning'
+  | 'indexing'
+  | 'cancelled'
+  | 'completed'
+  | 'failed';
+
+export interface ScanJobStatus {
+  id: string;
+  phase: ScanJobPhase;
+  success: boolean;
+  message: string;
+  rootPath?: string;
+  booksTotal: number;
+  booksScanned: number;
+  chaptersScanned: number;
+  skippedBooks: number;
+  currentBook?: string;
+  error?: string;
+  startedAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
+export interface ScanJobResponse {
+  job: ScanJobStatus;
 }

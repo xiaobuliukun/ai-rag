@@ -1,16 +1,20 @@
 import {
   createCorsOptions,
   isCorsOriginAllowed,
+  isRemoteApiAllowed,
+  isRequestHostAllowed,
   parseCorsOrigins,
 } from './cors';
 
 describe('CORS configuration', () => {
   const originalCorsOrigins = process.env.CORS_ORIGINS;
   const originalCorsOrigin = process.env.CORS_ORIGIN;
+  const originalAllowRemoteApi = process.env.ALLOW_REMOTE_API;
 
   afterEach(() => {
     restoreEnv('CORS_ORIGINS', originalCorsOrigins);
     restoreEnv('CORS_ORIGIN', originalCorsOrigin);
+    restoreEnv('ALLOW_REMOTE_API', originalAllowRemoteApi);
   });
 
   it('defaults to local web origins', () => {
@@ -56,9 +60,28 @@ describe('CORS configuration', () => {
 
     expect(callback).toHaveBeenCalledWith(null, true);
   });
+
+  it('restricts request hosts to local hosts by default', () => {
+    delete process.env.ALLOW_REMOTE_API;
+
+    expect(isRequestHostAllowed('localhost:3001')).toBe(true);
+    expect(isRequestHostAllowed('127.0.0.1:3001')).toBe(true);
+    expect(isRequestHostAllowed('[::1]:3001')).toBe(true);
+    expect(isRequestHostAllowed('192.168.1.10:3001')).toBe(false);
+  });
+
+  it('allows remote API access only through an explicit override', () => {
+    process.env.ALLOW_REMOTE_API = 'true';
+
+    expect(isRemoteApiAllowed()).toBe(true);
+    expect(isRequestHostAllowed('192.168.1.10:3001')).toBe(true);
+  });
 });
 
-function restoreEnv(name: 'CORS_ORIGINS' | 'CORS_ORIGIN', value?: string) {
+function restoreEnv(
+  name: 'CORS_ORIGINS' | 'CORS_ORIGIN' | 'ALLOW_REMOTE_API',
+  value?: string,
+) {
   if (value === undefined) {
     delete process.env[name];
     return;

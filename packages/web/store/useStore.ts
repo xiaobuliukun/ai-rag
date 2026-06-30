@@ -44,6 +44,12 @@ interface AppState {
   readingReminderMinutes: number
   setReadingReminderMinutes: (minutes: number) => void
 
+  autoSaveIntervalSeconds: number
+  setAutoSaveIntervalSeconds: (seconds: number) => void
+
+  smoothScrollRestore: boolean
+  setSmoothScrollRestore: (enabled: boolean) => void
+
   locale: Locale
   setLocale: (locale: Locale) => void
 
@@ -99,6 +105,15 @@ export const useStore = create<AppState>()(
       setReadingReminderMinutes: (minutes) =>
         set({ readingReminderMinutes: minutes }),
 
+      autoSaveIntervalSeconds: 30,
+      setAutoSaveIntervalSeconds: (seconds) =>
+        set({
+          autoSaveIntervalSeconds: clamp(Math.round(seconds), 5, 60),
+        }),
+
+      smoothScrollRestore: false,
+      setSmoothScrollRestore: (enabled) => set({ smoothScrollRestore: enabled }),
+
       locale: "zh-CN",
       setLocale: (locale) => set({ locale }),
 
@@ -136,6 +151,8 @@ export const useStore = create<AppState>()(
         autoBrightness: state.autoBrightness,
         paperTexture: state.paperTexture,
         readingReminderMinutes: state.readingReminderMinutes,
+        autoSaveIntervalSeconds: state.autoSaveIntervalSeconds,
+        smoothScrollRestore: state.smoothScrollRestore,
         locale: state.locale,
         aiConfig: state.aiConfig,
       }),

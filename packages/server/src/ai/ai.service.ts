@@ -6,6 +6,7 @@ import {
 import {
   AiChatRequest,
   AiChatResponse,
+  AiChatHistoryMessage,
   AiChatStreamEvent,
   AiRuntimeConfig,
   AiSource,
@@ -32,6 +33,8 @@ const MAX_RAG_EXCERPT_CHARS = 900;
 const MAX_SOURCES_PER_CHAPTER = 1;
 const MAX_CHAPTERS = 250;
 const MAX_SELECTED_TEXT = 2000;
+const MAX_HISTORY_MESSAGES = 12;
+const MAX_HISTORY_MESSAGE_CHARS = 1200;
 const STREAM_CHUNK_SIZE = 80;
 const DEFAULT_AI_CONFIG_ID = 'default';
 const CJK_STOP_CHARACTERS = new Set([
@@ -112,6 +115,7 @@ type PreparedChat = {
   message: string;
   sources: AiSource[];
   config: Required<AiRuntimeConfig>;
+  history: AiChatHistoryMessage[];
 };
 
 @Injectable()
@@ -194,7 +198,8 @@ export class AiService {
   }
 
   async chat(request: AiChatRequest): Promise<AiChatResponse> {
-    const { message, sources, config } = await this.prepareChat(request);
+    const { message, sources, config, history } =
+      await this.prepareChat(request);
 
     if (config.mode === 'openai-compatible') {
       try {
@@ -203,6 +208,7 @@ export class AiService {
           sources,
           request,
           config,
+          history,
         );
         return {
           answer,
@@ -236,7 +242,8 @@ export class AiService {
   }
 
   async *streamChat(request: AiChatRequest): AsyncGenerator<AiChatStreamEvent> {
-    const { message, sources, config } = await this.prepareChat(request);
+    const { message, sources, config, history } =
+      await this.prepareChat(request);
 
     yield {
       type: 'meta',
@@ -257,6 +264,7 @@ export class AiService {
           sources,
           request,
           config,
+          history,
         )) {
           answer += delta;
           yield {
@@ -349,6 +357,7 @@ export class AiService {
       message,
       sources: await this.retrieveSources(request, config),
       config,
+      history: this.normalizeHistory(request.history),
     };
   }
 
@@ -359,7 +368,12 @@ export class AiService {
     const context = request.context;
     const selectedText =
       context?.selectedText?.slice(0, MAX_SELECTED_TEXT) ?? '';
-    const queryText = `${request.message} ${selectedText}`;
+    const historyQuery = this.normalizeHistory(request.history)
+      .filter((message) => message.role === 'user')
+      .slice(-4)
+      .map((message) => message.content)
+      .join(' ');
+    const queryText = `${historyQuery} ${request.message} ${selectedText}`;
     const terms = this.buildTerms(queryText, true);
     const searchQuery = this.buildSearchQuery(queryText);
 
@@ -721,12 +735,19 @@ export class AiService {
       return '没有在本地书库里找到足够相关的章节内容。';
     }
 
-    const bullets = sources
+    const lead = sources
       .slice(0, 3)
-      .map((source, index) => `${index + 1}. ${source.excerpt} [${index + 1}]`)
+      .map((source, index) => `${index + 1}. ${source.chapterTitle}`)
+      .join('；');
+    const bullets = sources
+      .slice(0, 5)
+      .map(
+        (source, index) =>
+          `${index + 1}. ${source.excerpt} [${index + 1}]\n   来源：${source.bookTitle} / ${source.chapterTitle}`,
+      )
       .join('\n\n');
 
-    return `基于本地资料：\n\n${bullets}\n\n如需更完整的综合回答，请在设置中配置 OpenAI 兼容模型。`;
+    return `基于本地资料，我找到 ${sources.length} 条相关线索，最相关的是：${lead}。\n\n${bullets}\n\n本地模式不会编造未在资料中出现的结论。需要更完整的综合、对比或推理时，可以在设置中配置 OpenAI 兼容模型。`;
   }
 
   private async resolveConfig(
@@ -850,19 +871,8 @@ export class AiService {
     sources: AiSource[],
     request: AiChatRequest,
     config: Required<AiRuntimeConfig>,
+    history: AiChatHistoryMessage[],
   ) {
-    const contextText = sources
-      .map(
-        (source, index) =>
-          `[${index + 1}] ${source.bookTitle} / ${source.chapterTitle}\n${source.excerpt}`,
-      )
-      .join('\n\n')
-      .slice(0, config.ragContextChars);
-
-    const selectedText = request.context?.selectedText
-      ? `\nSelected text:\n${request.context.selectedText.slice(0, MAX_SELECTED_TEXT)}`
-      : '';
-
     const response = await fetch(
       `${config.baseUrl.replace(/\/$/, '')}/chat/completions`,
       {
@@ -876,17 +886,13 @@ export class AiService {
         body: JSON.stringify({
           model: config.model,
           temperature: 0.2,
-          messages: [
-            {
-              role: 'system',
-              content:
-                'You are a study assistant for a local Markdown library. Answer using only the provided context. Cite sources with bracket numbers like [1]. If the context is insufficient, say so briefly.',
-            },
-            {
-              role: 'user',
-              content: `Question:\n${message}${selectedText}\n\nContext:\n${contextText}`,
-            },
-          ],
+          messages: this.buildModelMessages(
+            message,
+            sources,
+            request,
+            config,
+            history,
+          ),
         }),
       },
     );
@@ -915,19 +921,8 @@ export class AiService {
     sources: AiSource[],
     request: AiChatRequest,
     config: Required<AiRuntimeConfig>,
+    history: AiChatHistoryMessage[],
   ) {
-    const contextText = sources
-      .map(
-        (source, index) =>
-          `[${index + 1}] ${source.bookTitle} / ${source.chapterTitle}\n${source.excerpt}`,
-      )
-      .join('\n\n')
-      .slice(0, config.ragContextChars);
-
-    const selectedText = request.context?.selectedText
-      ? `\nSelected text:\n${request.context.selectedText.slice(0, MAX_SELECTED_TEXT)}`
-      : '';
-
     const response = await fetch(
       `${config.baseUrl.replace(/\/$/, '')}/chat/completions`,
       {
@@ -942,17 +937,13 @@ export class AiService {
           model: config.model,
           temperature: 0.2,
           stream: true,
-          messages: [
-            {
-              role: 'system',
-              content:
-                'You are a study assistant for a local Markdown library. Answer using only the provided context. Cite sources with bracket numbers like [1]. If the context is insufficient, say so briefly.',
-            },
-            {
-              role: 'user',
-              content: `Question:\n${message}${selectedText}\n\nContext:\n${contextText}`,
-            },
-          ],
+          messages: this.buildModelMessages(
+            message,
+            sources,
+            request,
+            config,
+            history,
+          ),
         }),
       },
     );
@@ -1037,6 +1028,58 @@ export class AiService {
       chunks.push(answer.slice(index, index + STREAM_CHUNK_SIZE));
     }
     return chunks;
+  }
+
+  private buildModelMessages(
+    message: string,
+    sources: AiSource[],
+    request: AiChatRequest,
+    config: Required<AiRuntimeConfig>,
+    history: AiChatHistoryMessage[],
+  ) {
+    const contextText = sources
+      .map(
+        (source, index) =>
+          `[${index + 1}] ${source.bookTitle} / ${source.chapterTitle}\n${source.excerpt}`,
+      )
+      .join('\n\n')
+      .slice(0, config.ragContextChars);
+
+    const selectedText = request.context?.selectedText
+      ? `\nSelected text:\n${request.context.selectedText.slice(0, MAX_SELECTED_TEXT)}`
+      : '';
+
+    return [
+      {
+        role: 'system',
+        content:
+          'You are a study assistant for a local Markdown library. Answer using only the provided context and the conversation history. Cite sources with bracket numbers like [1]. If the context is insufficient, say so briefly.',
+      },
+      ...history,
+      {
+        role: 'user',
+        content: `Question:\n${message}${selectedText}\n\nContext:\n${contextText}`,
+      },
+    ];
+  }
+
+  private normalizeHistory(history?: AiChatHistoryMessage[]) {
+    if (!Array.isArray(history)) {
+      return [];
+    }
+
+    return history
+      .filter(
+        (message): message is AiChatHistoryMessage =>
+          (message.role === 'user' || message.role === 'assistant') &&
+          typeof message.content === 'string' &&
+          message.content.trim().length > 0,
+      )
+      .slice(-MAX_HISTORY_MESSAGES)
+      .map((message) => ({
+        role: message.role,
+        content: message.content.trim().slice(0, MAX_HISTORY_MESSAGE_CHARS),
+      }));
   }
 }
 

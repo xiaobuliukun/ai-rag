@@ -3,6 +3,7 @@
 import * as React from "react";
 import Image from "next/image";
 import Link from "next/link";
+import { useTheme } from "next-themes";
 import {
   AlertCircle,
   ArchiveRestore,
@@ -20,7 +21,9 @@ import {
   BackupPayload,
   Book,
   Bookmark,
+  ClientPreferencesBackup,
   ImportBackupMode,
+  ScanJobStatus,
   SearchIndexStatus,
 } from "@/types";
 import {
@@ -31,19 +34,23 @@ import {
   getBookmarks,
   getBooks,
   getSearchIndexStatus,
+  cancelScanJob,
   importBackup,
-  rescanKnownBooks,
-  scanDirectory,
+  startRescanKnownBooksJob,
+  startScanJob,
   updateBook,
+  waitForScanJob,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
+import { useStore } from "@/store/useStore";
 
 const LIBRARY_REFRESH_EVENT = "library:refresh";
 const MAX_COVER_IMAGE_SIZE = 1_500_000;
 
 export function ManagementView() {
   const { t } = useI18n();
+  const { setTheme } = useTheme();
   const [books, setBooks] = React.useState<Book[]>([]);
   const [bookmarks, setBookmarks] = React.useState<Bookmark[]>([]);
   const [indexStatus, setIndexStatus] =
@@ -63,6 +70,7 @@ export function ManagementView() {
   const [isImporting, setIsImporting] = React.useState(false);
   const [importMode, setImportMode] =
     React.useState<ImportBackupMode>("merge");
+  const [scanJob, setScanJob] = React.useState<ScanJobStatus | null>(null);
   const [status, setStatus] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -130,8 +138,13 @@ export function ManagementView() {
     setError(null);
 
     try {
-      const result = await scanDirectory(path);
-      setStatus(result.message);
+      const { job } = await startScanJob(path);
+      setScanJob(job);
+      const completedJob = await waitForScanJob(job.id, setScanJob);
+      if (completedJob.phase === "failed") {
+        throw new Error(completedJob.error ?? completedJob.message);
+      }
+      setStatus(completedJob.message);
       await refreshLibrary();
     } catch (err) {
       setError(err instanceof Error ? err.message : t("library.scanFailed"));
@@ -146,8 +159,13 @@ export function ManagementView() {
     setError(null);
 
     try {
-      const result = await rescanKnownBooks();
-      setStatus(result.message);
+      const { job } = await startRescanKnownBooksJob();
+      setScanJob(job);
+      const completedJob = await waitForScanJob(job.id, setScanJob);
+      if (completedJob.phase === "failed") {
+        throw new Error(completedJob.error ?? completedJob.message);
+      }
+      setStatus(completedJob.message);
       await refreshLibrary();
     } catch (err) {
       setError(
@@ -243,7 +261,10 @@ export function ManagementView() {
     setError(null);
 
     try {
-      const payload = await exportBackup();
+      const payload = {
+        ...(await exportBackup()),
+        clientPreferences: readClientPreferences(),
+      } satisfies BackupPayload;
       const blob = new Blob([JSON.stringify(payload, null, 2)], {
         type: "application/json",
       });
@@ -275,6 +296,7 @@ export function ManagementView() {
     try {
       const payload = JSON.parse(await file.text()) as BackupPayload;
       const result = await importBackup(payload, importMode);
+      applyClientPreferences(payload.clientPreferences, setTheme);
       setStatus(result.message);
       setSelectedBookId("");
       await refreshLibrary();
@@ -421,6 +443,13 @@ export function ManagementView() {
             : t("management.rescanKnown")}
         </button>
       </form>
+
+      {(isScanning || isRescanningKnown) && scanJob && (
+        <ScanJobCard
+          job={scanJob}
+          onCancel={() => void cancelScanJob(scanJob.id).then(({ job }) => setScanJob(job))}
+        />
+      )}
 
       {indexStatus && <IndexStatusCard status={indexStatus} />}
 
@@ -652,6 +681,72 @@ export function ManagementView() {
   );
 }
 
+function ScanJobCard({
+  job,
+  onCancel,
+}: {
+  job: ScanJobStatus;
+  onCancel: () => void;
+}) {
+  const { t } = useI18n();
+  const percent =
+    job.booksTotal > 0
+      ? Math.round((job.booksScanned / job.booksTotal) * 100)
+      : job.phase === "indexing"
+        ? 70
+        : 8;
+  const phaseLabel =
+    job.phase === "indexing"
+      ? t("management.indexing")
+      : job.phase === "cancelled"
+        ? t("management.cancelled")
+      : job.phase === "queued"
+        ? t("management.queued")
+        : t("management.scanning");
+
+  return (
+    <section className="shrink-0 rounded-lg border bg-card p-4 shadow-sm">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-sm font-semibold">
+            <Loader2 className="h-4 w-4 animate-spin text-primary" />
+            {phaseLabel}
+          </div>
+          <div className="mt-1 truncate text-sm text-muted-foreground">
+            {job.currentBook ?? job.message}
+          </div>
+        </div>
+        <div className="min-w-[14rem]">
+          <div className="flex justify-between text-xs text-muted-foreground">
+            <span>
+              {job.booksScanned}/{job.booksTotal || "?"}
+            </span>
+            <span>
+              {t("management.scanCounters", {
+                chapters: job.chaptersScanned,
+                skipped: job.skippedBooks,
+              })}
+            </span>
+          </div>
+          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-secondary">
+            <div
+              className="h-full rounded-full bg-primary transition-all duration-500"
+              style={{ width: `${Math.min(100, Math.max(6, percent))}%` }}
+            />
+          </div>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="mt-3 h-8 w-full rounded-md border bg-background px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+          >
+            {t("management.cancelScan")}
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function IndexStatusCard({ status }: { status: SearchIndexStatus }) {
   const { t } = useI18n();
   const isReady = status.isFtsReady && status.isVectorReady;
@@ -756,4 +851,63 @@ function readFileAsDataUrl(file: File) {
     reader.addEventListener("error", () => reject(reader.error));
     reader.readAsDataURL(file);
   });
+}
+
+function readClientPreferences(): ClientPreferencesBackup {
+  return {
+    moxuPreferences: parseStoredJson(localStorage.getItem("moxu-preferences")),
+    theme: localStorage.getItem("theme"),
+  };
+}
+
+function applyClientPreferences(
+  preferences: ClientPreferencesBackup | null | undefined,
+  setTheme: (theme: string) => void,
+) {
+  if (!preferences) {
+    return;
+  }
+
+  writeStoredJson("moxu-preferences", preferences.moxuPreferences);
+  applyMoxuPreferenceState(preferences.moxuPreferences);
+  if (typeof preferences.theme === "string") {
+    localStorage.setItem("theme", preferences.theme);
+    setTheme(preferences.theme);
+  }
+}
+
+function parseStoredJson(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return value;
+  }
+}
+
+function writeStoredJson(key: string, value: unknown) {
+  if (value === undefined || value === null) {
+    return;
+  }
+
+  localStorage.setItem(
+    key,
+    typeof value === "string" ? value : JSON.stringify(value),
+  );
+}
+
+function applyMoxuPreferenceState(value: unknown) {
+  if (!value || typeof value !== "object") {
+    return;
+  }
+
+  const state = (value as { state?: unknown }).state;
+  if (!state || typeof state !== "object") {
+    return;
+  }
+
+  useStore.setState(state as Partial<ReturnType<typeof useStore.getState>>);
 }

@@ -247,6 +247,65 @@ describe('AiService', () => {
     expect(response.sources[0].excerpt.length).toBeLessThanOrEqual(240);
   });
 
+  it('passes bounded conversation history to OpenAI-compatible chat', async () => {
+    prisma.chapterChunk.findMany.mockResolvedValue([]);
+    prisma.chapter.findMany.mockResolvedValue([]);
+    contentIndex.search.mockResolvedValue([
+      {
+        chunkId: 'chunk-1',
+        bookId: 'book-1',
+        chapterId: 'chapter-1',
+        bookTitle: 'React Patterns',
+        chapterTitle: 'Hooks',
+        content: 'Effects run after rendering and should be kept focused.',
+        excerpt: 'Effects run after rendering and should be kept focused.',
+        highlightedExcerpt:
+          'Effects run after rendering and should be kept focused.',
+        score: 30,
+      },
+    ]);
+    const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          choices: [
+            { message: { content: 'Use effects for side effects. [1]' } },
+          ],
+        }),
+    } as Response);
+
+    const response = await service.chat({
+      message: 'And effects?',
+      context: { bookId: 'book-1' },
+      history: [
+        { role: 'user', content: 'What are hooks?' },
+        { role: 'assistant', content: 'Hooks share stateful logic.' },
+      ],
+      config: {
+        mode: 'openai-compatible',
+        baseUrl: 'https://api.example.com/v1',
+        model: 'gpt-test',
+        apiKey: 'sk-test',
+      },
+    });
+
+    const body = JSON.parse(
+      (fetchMock.mock.calls[0][1] as RequestInit).body as string,
+    ) as { messages: Array<{ role: string; content: string }> };
+
+    expect(response.mode).toBe('openai-compatible');
+    expect(body.messages).toEqual(
+      expect.arrayContaining([
+        { role: 'user', content: 'What are hooks?' },
+        { role: 'assistant', content: 'Hooks share stateful logic.' },
+      ]),
+    );
+    expect(body.messages.at(-1)?.content).toContain('Question:\nAnd effects?');
+    expect(body.messages.at(-1)?.content).toContain('Context:');
+
+    fetchMock.mockRestore();
+  });
+
   it('persists bounded RAG settings with encrypted API keys', async () => {
     const updatedAt = new Date('2026-06-26T00:00:00.000Z');
     let capturedPayload: AiConfigUpsertPayload | undefined;

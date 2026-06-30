@@ -82,10 +82,10 @@ export function AppSidebar() {
           </div>
           <div className="min-w-0">
             <div className="text-lg font-semibold leading-tight">
-              墨序
+              {t("library.brand")}
             </div>
             <div className="text-xs font-medium">
-              私人阅读档案
+              {t("nav.privateArchive")}
             </div>
           </div>
         </div>

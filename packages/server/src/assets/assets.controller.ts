@@ -47,6 +47,8 @@ export class AssetsController {
       throw new NotFoundException('File not found');
     }
 
+    response.setHeader('Cache-Control', 'private, max-age=3600');
+    response.setHeader('X-Content-Type-Options', 'nosniff');
     return response.sendFile(requestedPath);
   }
 }

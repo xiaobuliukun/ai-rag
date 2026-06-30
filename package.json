@@ -7,13 +7,21 @@
   ],
   "scripts": {
     "dev": "npm run dev --workspaces --if-present",
+    "local": "node scripts/moxu-local.mjs",
+    "start:local": "node scripts/moxu-local.mjs",
     "dev:web": "npm run dev -w packages/web",
     "dev:server": "npm run start:dev -w packages/server",
     "build": "npm run build --workspaces --if-present",
     "build:web": "npm run build -w packages/web",
     "build:server": "npm run build -w packages/server",
+    "desktop:dev": "npm run dev -w packages/desktop",
+    "desktop:pack": "npm run build && npm run pack -w packages/desktop",
+    "desktop:dist": "npm run build && npm run dist -w packages/desktop",
+    "desktop:dist:mac": "npm run build && npm run dist:mac -w packages/desktop",
+    "desktop:dist:mac:signed": "npm run build && npm run dist:mac:signed -w packages/desktop",
     "lint": "npm run lint --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
+    "test:large": "node scripts/large-library-smoke.mjs",
     "clean": "rm -rf node_modules packages/*/node_modules packages/*/dist packages/web/.next"
   },
   "engines": {

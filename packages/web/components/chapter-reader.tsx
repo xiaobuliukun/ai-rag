@@ -68,6 +68,10 @@ export function ChapterReader({
   const readingReminderMinutes = useStore(
     (state) => state.readingReminderMinutes,
   );
+  const autoSaveIntervalSeconds = useStore(
+    (state) => state.autoSaveIntervalSeconds,
+  );
+  const smoothScrollRestore = useStore((state) => state.smoothScrollRestore);
   const setReadingContext = useStore((state) => state.setReadingContext);
   const [brightnessClock, setBrightnessClock] = React.useState(() => new Date());
   const effectiveBrightness = React.useMemo(
@@ -89,6 +93,10 @@ export function ChapterReader({
         "--paper-texture-opacity": paperTexture ? "0.22" : "0",
       }) as React.CSSProperties,
     [colorTemperature, effectiveBrightness, fontSize, lineHeight, paperTexture],
+  );
+  const autoSaveIntervalMs = React.useMemo(
+    () => Math.max(5000, autoSaveIntervalSeconds * 1000),
+    [autoSaveIntervalSeconds],
   );
 
   const baseReadingContext = React.useMemo(
@@ -141,11 +149,14 @@ export function ChapterReader({
     }
 
     const frame = window.requestAnimationFrame(() => {
-      window.scrollTo({ top: scrollPosition, behavior: "auto" });
+      window.scrollTo({
+        top: scrollPosition,
+        behavior: smoothScrollRestore ? "smooth" : "auto",
+      });
     });
 
     return () => window.cancelAnimationFrame(frame);
-  }, [chapter.id, chapter.readingProgress?.scrollPosition]);
+  }, [chapter.id, chapter.readingProgress?.scrollPosition, smoothScrollRestore]);
 
   React.useEffect(() => {
     setShowReminder(false);
@@ -209,10 +220,10 @@ export function ChapterReader({
 
     const timer = window.setTimeout(() => {
       void persistProgress(progress);
-    }, 1200);
+    }, autoSaveIntervalMs);
 
     return () => window.clearTimeout(timer);
-  }, [persistProgress, progress]);
+  }, [autoSaveIntervalMs, persistProgress, progress]);
 
   React.useEffect(() => {
     const readTick = () => {
@@ -236,7 +247,7 @@ export function ChapterReader({
     const flushTimer = window.setInterval(() => {
       readTick();
       void persistProgress(progressRef.current);
-    }, 30000);
+    }, autoSaveIntervalMs);
     const flushOnVisibilityChange = () => {
       readTick();
       if (document.visibilityState === "hidden") {
@@ -253,7 +264,7 @@ export function ChapterReader({
       window.clearInterval(flushTimer);
       document.removeEventListener("visibilitychange", flushOnVisibilityChange);
     };
-  }, [persistProgress]);
+  }, [autoSaveIntervalMs, persistProgress]);
 
   React.useEffect(() => {
     const updateFromScroll = () => {

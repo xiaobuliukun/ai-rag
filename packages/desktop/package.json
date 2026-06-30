@@ -1,0 +1,121 @@
+{
+  "name": "@moxu/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Desktop shell for Moxu",
+  "main": "src/main.cjs",
+  "author": "Moxu",
+  "scripts": {
+    "dev": "electron .",
+    "pack": "electron-builder --dir --publish never",
+    "dist": "electron-builder --publish never",
+    "dist:mac": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg zip --publish never",
+    "dist:mac:signed": "electron-builder --mac dmg zip --publish never",
+    "dist:win": "electron-builder --win nsis portable --publish never",
+    "dist:linux": "electron-builder --linux AppImage deb --publish never"
+  },
+  "dependencies": {
+    "electron-updater": "6.6.2"
+  },
+  "devDependencies": {
+    "electron": "38.2.2",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "app.moxu.desktop",
+    "productName": "墨序",
+    "directories": {
+      "output": "../../release/desktop"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../../package.json",
+        "to": "runtime/package.json"
+      },
+      {
+        "from": "../../package-lock.json",
+        "to": "runtime/package-lock.json"
+      },
+      {
+        "from": "../../node_modules",
+        "to": "runtime/node_modules",
+        "filter": [
+          "**/*",
+          "!@moxu/desktop",
+          "!@moxu/desktop/**/*"
+        ]
+      },
+      {
+        "from": "../../packages/server/dist",
+        "to": "runtime/packages/server/dist"
+      },
+      {
+        "from": "../../packages/server/package.json",
+        "to": "runtime/packages/server/package.json"
+      },
+      {
+        "from": "../../packages/server/prisma",
+        "to": "runtime/packages/server/prisma"
+      },
+      {
+        "from": "../../packages/shared/dist",
+        "to": "runtime/packages/shared/dist"
+      },
+      {
+        "from": "../../packages/shared/package.json",
+        "to": "runtime/packages/shared/package.json"
+      },
+      {
+        "from": "../../packages/web/.next",
+        "to": "runtime/packages/web/.next"
+      },
+      {
+        "from": "../../packages/web/public",
+        "to": "runtime/packages/web/public"
+      },
+      {
+        "from": "../../packages/web/package.json",
+        "to": "runtime/packages/web/package.json"
+      }
+    ],
+    "asarUnpack": [
+      "node_modules/better-sqlite3/**/*",
+      "node_modules/@prisma/**/*",
+      "node_modules/.prisma/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.education",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
+    },
+    "dmg": {
+      "artifactName": "Moxu-${version}-${arch}.${ext}"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "artifactName": "Moxu-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "linux": {
+      "category": "Education",
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "artifactName": "Moxu-${version}-${arch}.${ext}"
+    }
+  }
+}

@@ -8,6 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 
 const AVERAGE_READING_CHARS_PER_MINUTE = 450;
 const MAX_READING_SECONDS_DELTA = 15 * 60;
+const MAX_COVER_IMAGE_LENGTH = 2_100_000;
 
 @Injectable()
 export class BooksService {
@@ -165,6 +166,14 @@ export class BooksService {
     if (request.title !== undefined && !title) {
       throw new BadRequestException('Title cannot be empty');
     }
+    const coverImage = request.coverImage?.trim();
+    if (
+      request.coverImage !== undefined &&
+      coverImage &&
+      coverImage.length > MAX_COVER_IMAGE_LENGTH
+    ) {
+      throw new BadRequestException('Cover image is too large');
+    }
 
     await this.prisma.book.update({
       where: { id },
@@ -174,7 +183,7 @@ export class BooksService {
           ? { description: request.description?.trim() || null }
           : {}),
         ...(request.coverImage !== undefined
-          ? { coverImage: request.coverImage?.trim() || null }
+          ? { coverImage: coverImage || null }
           : {}),
         ...(request.tags !== undefined
           ? { tags: JSON.stringify(normalizeTags(request.tags)) }

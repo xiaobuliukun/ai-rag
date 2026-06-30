@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import type { ScanJobPhase } from '@moxu/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import * as fs from 'fs-extra';
 import * as path from 'path';
@@ -11,6 +12,22 @@ type MarkdownFile = {
   relativePath: string;
 };
 
+export type ScanProgress = {
+  phase?: ScanJobPhase;
+  booksTotal?: number;
+  booksScanned?: number;
+  chaptersScanned?: number;
+  skippedBooks?: number;
+  currentBook?: string;
+  message?: string;
+};
+
+type ScanProgressReporter = (progress: ScanProgress) => void;
+type ScanOptions = {
+  onProgress?: ScanProgressReporter;
+  signal?: AbortSignal;
+};
+
 @Injectable()
 export class ScanService {
   private readonly logger = new Logger(ScanService.name);
@@ -20,25 +37,46 @@ export class ScanService {
     private contentIndex: ContentIndexService,
   ) {}
 
-  async scanDirectory(rootDir: string) {
+  async scanDirectory(
+    rootDir: string,
+    optionsOrProgress?: ScanOptions | ScanProgressReporter,
+  ) {
+    const options = normalizeScanOptions(optionsOrProgress);
     this.logger.log(`Scanning directory: ${rootDir}`);
 
     await this.assertDirectory(rootDir);
+    assertNotCancelled(options.signal);
 
     const entries = await fs.readdir(rootDir, { withFileTypes: true });
+    const bookEntries = entries.filter((entry) => entry.isDirectory());
 
     let booksScanned = 0;
     let chaptersScanned = 0;
 
-    for (const entry of entries) {
-      if (entry.isDirectory()) {
-        const chapterCount = await this.processBook(
-          path.join(rootDir, entry.name),
-          entry.name,
-        );
-        booksScanned += 1;
-        chaptersScanned += chapterCount;
-      }
+    options.onProgress?.({
+      phase: 'scanning',
+      booksTotal: bookEntries.length,
+      booksScanned,
+      chaptersScanned,
+      message: `Found ${bookEntries.length} books`,
+    });
+
+    for (const entry of bookEntries) {
+      assertNotCancelled(options.signal);
+      const chapterCount = await this.processBook(
+        path.join(rootDir, entry.name),
+        entry.name,
+        options,
+      );
+      booksScanned += 1;
+      chaptersScanned += chapterCount;
+      options.onProgress?.({
+        phase: 'scanning',
+        booksTotal: bookEntries.length,
+        booksScanned,
+        chaptersScanned,
+        currentBook: entry.name,
+      });
     }
 
     this.logger.log('Scan completed');
@@ -50,7 +88,10 @@ export class ScanService {
     };
   }
 
-  async rescanKnownBooks() {
+  async rescanKnownBooks(
+    optionsOrProgress?: ScanOptions | ScanProgressReporter,
+  ) {
+    const options = normalizeScanOptions(optionsOrProgress);
     const books = await this.prisma.book.findMany({
       select: {
         path: true,
@@ -65,15 +106,46 @@ export class ScanService {
     let chaptersScanned = 0;
     let skippedBooks = 0;
 
+    options.onProgress?.({
+      phase: 'scanning',
+      booksTotal: books.length,
+      booksScanned,
+      chaptersScanned,
+      skippedBooks,
+      message: `Found ${books.length} known books`,
+    });
+
     for (const book of books) {
+      assertNotCancelled(options.signal);
       if (!(await this.isDirectory(book.path))) {
         skippedBooks += 1;
+        options.onProgress?.({
+          phase: 'scanning',
+          booksTotal: books.length,
+          booksScanned,
+          chaptersScanned,
+          skippedBooks,
+          currentBook: book.title,
+          message: `Skipped missing book: ${book.title}`,
+        });
         continue;
       }
 
-      const chapterCount = await this.processBook(book.path, book.title);
+      const chapterCount = await this.processBook(
+        book.path,
+        book.title,
+        options,
+      );
       booksScanned += 1;
       chaptersScanned += chapterCount;
+      options.onProgress?.({
+        phase: 'scanning',
+        booksTotal: books.length,
+        booksScanned,
+        chaptersScanned,
+        skippedBooks,
+        currentBook: book.title,
+      });
     }
 
     return {
@@ -107,8 +179,18 @@ export class ScanService {
     return stats.isDirectory();
   }
 
-  private async processBook(bookPath: string, bookTitle: string) {
+  private async processBook(
+    bookPath: string,
+    bookTitle: string,
+    options: ScanOptions,
+  ) {
     this.logger.log(`Processing book: ${bookTitle}`);
+    assertNotCancelled(options.signal);
+    options.onProgress?.({
+      phase: 'scanning',
+      currentBook: bookTitle,
+      message: `Scanning ${bookTitle}`,
+    });
 
     // Create or update Book
     const book = await this.prisma.book.upsert({
@@ -123,14 +205,23 @@ export class ScanService {
     const chapterFiles = await this.findMarkdownFiles(bookPath);
 
     for (const [index, file] of chapterFiles.entries()) {
+      assertNotCancelled(options.signal);
       await this.processChapter(book.id, file, index);
     }
 
+    assertNotCancelled(options.signal);
     await this.removeMissingChapters(
       book.id,
       chapterFiles.map((file) => file.relativePath),
     );
+    options.onProgress?.({
+      phase: 'indexing',
+      currentBook: bookTitle,
+      message: `Indexing ${bookTitle}`,
+    });
+    assertNotCancelled(options.signal);
     await this.contentIndex.syncBook(book.id);
+    assertNotCancelled(options.signal);
 
     return chapterFiles.length;
   }
@@ -241,5 +332,26 @@ export class ScanService {
         })),
       });
     }
+  }
+}
+
+function normalizeScanOptions(
+  optionsOrProgress?: ScanOptions | ScanProgressReporter,
+): ScanOptions {
+  return typeof optionsOrProgress === 'function'
+    ? { onProgress: optionsOrProgress }
+    : (optionsOrProgress ?? {});
+}
+
+function assertNotCancelled(signal?: AbortSignal) {
+  if (signal?.aborted) {
+    throw new ScanCancelledError();
+  }
+}
+
+export class ScanCancelledError extends Error {
+  constructor() {
+    super('Scan cancelled');
+    this.name = 'ScanCancelledError';
   }
 }

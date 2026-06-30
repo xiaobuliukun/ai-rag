@@ -12,6 +12,9 @@ import {
 const DEFAULT_LIMIT = 50;
 const SNIPPET_RADIUS = 90;
 const MAX_SNIPPET_LENGTH = 220;
+const REMOTE_EMBEDDING_BATCH_SIZE = 48;
+const MAX_REMOTE_EMBEDDING_TEXT_CHARS = 8000;
+const VECTOR_SEARCH_BATCH_SIZE = 500;
 
 export type FtsQueryMode = 'and' | 'or';
 
@@ -362,53 +365,75 @@ export class ContentIndexService {
     await this.ensureIndexReady();
     await this.ensureVectorIndexReady(embeddingConfig);
 
-    const rows = await this.prisma.vectorData.findMany({
-      where: {
-        ...(options?.bookId
-          ? {
-              chapter: {
-                bookId: options.bookId,
-              },
-            }
-          : {}),
-      },
-      select: {
-        chunkId: true,
-        chapterId: true,
-        content: true,
-        embedding: true,
-        chapter: {
-          select: {
-            title: true,
-            bookId: true,
-            book: {
-              select: {
-                title: true,
+    const limit = options?.limit ?? DEFAULT_LIMIT;
+    const candidateLimit = Math.max(limit * 4, limit);
+    const topResults: SemanticSearchResult[] = [];
+    let cursor: string | undefined;
+
+    while (true) {
+      const rows = await this.prisma.vectorData.findMany({
+        where: {
+          ...(options?.bookId
+            ? {
+                chapter: {
+                  bookId: options.bookId,
+                },
+              }
+            : {}),
+        },
+        select: {
+          id: true,
+          chunkId: true,
+          chapterId: true,
+          content: true,
+          embedding: true,
+          chapter: {
+            select: {
+              title: true,
+              bookId: true,
+              book: {
+                select: {
+                  title: true,
+                },
               },
             },
           },
         },
-      },
-    });
+        orderBy: {
+          id: 'asc',
+        },
+        take: VECTOR_SEARCH_BATCH_SIZE,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      });
 
-    return rows
-      .map((row) => ({
-        chunkId: row.chunkId,
-        bookId: row.chapter.bookId,
-        chapterId: row.chapterId,
-        bookTitle: row.chapter.book.title,
-        chapterTitle: row.chapter.title,
-        content: row.content,
-        score: Math.round(
-          Math.max(
-            0,
-            cosineSimilarity(queryEmbedding, parseEmbedding(row.embedding)),
-          ) * 100,
-        ),
-      }))
-      .filter((result) => result.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, options?.limit ?? DEFAULT_LIMIT);
+      if (!rows.length) {
+        break;
+      }
+
+      topResults.push(
+        ...rows
+          .map((row) => ({
+            chunkId: row.chunkId,
+            bookId: row.chapter.bookId,
+            chapterId: row.chapterId,
+            bookTitle: row.chapter.book.title,
+            chapterTitle: row.chapter.title,
+            content: row.content,
+            score: Math.round(
+              Math.max(
+                0,
+                cosineSimilarity(queryEmbedding, parseEmbedding(row.embedding)),
+              ) * 100,
+            ),
+          }))
+          .filter((result) => result.score > 0),
+      );
+      topResults.sort((a, b) => b.score - a.score);
+      topResults.length = Math.min(topResults.length, candidateLimit);
+      cursor = rows[rows.length - 1]?.id;
+    }
+
+    return topResults.slice(0, limit);
   }
 
   private async ensureVectorIndexReady(embeddingConfig: EmbeddingConfig) {
@@ -487,47 +512,61 @@ export class ContentIndexService {
       };
     }
 
-    try {
-      const response = await fetch(
-        `${config.baseUrl?.replace(/\/$/, '')}/embeddings`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${config.apiKey}`,
-          },
-          body: JSON.stringify({
-            model: config.model,
-            input: texts,
-          }),
-        },
+    const vectors: number[][] = [];
+
+    for (
+      let start = 0;
+      start < texts.length;
+      start += REMOTE_EMBEDDING_BATCH_SIZE
+    ) {
+      const originalBatch = texts.slice(
+        start,
+        start + REMOTE_EMBEDDING_BATCH_SIZE,
+      );
+      const requestBatch = originalBatch.map((text) =>
+        this.normalizeEmbeddingText(text),
       );
 
-      if (!response.ok) {
-        throw new Error(
-          `Embedding request failed with status ${response.status}`,
+      try {
+        const response = await fetch(
+          `${config.baseUrl?.replace(/\/$/, '')}/embeddings`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${config.apiKey}`,
+            },
+            body: JSON.stringify({
+              model: config.model,
+              input: requestBatch,
+            }),
+          },
         );
-      }
 
-      const payload = (await response.json()) as EmbeddingResponse;
-      return {
-        vectors: texts.map((text, index) =>
+        if (!response.ok) {
+          throw new Error(
+            `Embedding request failed with status ${response.status}`,
+          );
+        }
+
+        const payload = (await response.json()) as EmbeddingResponse;
+        const batchVectors = originalBatch.map((text, index) =>
           this.normalizeRemoteEmbedding(
-            payload.data?.find((item) => item.index === index)?.embedding,
+            payload.data?.find((item) => item.index === index)?.embedding ??
+              payload.data?.[index]?.embedding,
             text,
           ),
-        ),
-        config,
-      };
-    } catch {
-      return {
-        vectors: texts.map((text) => buildLocalEmbedding(text)),
-        config: {
-          provider: 'local',
-          model: 'local-hash-v1',
-        } satisfies EmbeddingConfig,
-      };
+        );
+        vectors.push(...batchVectors);
+      } catch {
+        vectors.push(...originalBatch.map((text) => buildLocalEmbedding(text)));
+      }
     }
+
+    return {
+      vectors,
+      config,
+    };
   }
 
   private async buildEmbedding(text: string, config: EmbeddingConfig) {
@@ -546,7 +585,7 @@ export class ContentIndexService {
           },
           body: JSON.stringify({
             model: config.model,
-            input: text,
+            input: this.normalizeEmbeddingText(text),
           }),
         },
       );
@@ -569,6 +608,13 @@ export class ContentIndexService {
       value.every((item) => typeof item === 'number')
       ? value
       : buildLocalEmbedding(fallbackText);
+  }
+
+  private normalizeEmbeddingText(text: string) {
+    return text
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, MAX_REMOTE_EMBEDDING_TEXT_CHARS);
   }
 }
 

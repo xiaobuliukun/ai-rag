@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { AiChatResponse, AiSource } from "@/types";
+import { AiChatHistoryMessage, AiChatResponse, AiSource } from "@/types";
 import { streamChatWithAI } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useStore } from "@/store/useStore";
@@ -79,6 +79,7 @@ export function AIAssistantPanel() {
       return;
     }
 
+    const history = buildChatHistory(messages);
     const userMessage: Message = {
       id: crypto.randomUUID(),
       role: "user",
@@ -102,6 +103,7 @@ export function AIAssistantPanel() {
           message: content,
           context: readingContext,
           config: aiConfig,
+          history,
         },
         (event) => {
           if (event.type === "error") {
@@ -389,6 +391,16 @@ export function AIAssistantPanel() {
   );
 }
 
+function buildChatHistory(messages: Message[]): AiChatHistoryMessage[] {
+  return messages
+    .filter((message) => !message.isStreaming && message.content.trim())
+    .map((message) => ({
+      role: message.role,
+      content: message.content.trim(),
+    }))
+    .slice(-12);
+}
+
 function ChatMarkdown({ content }: { content: string }) {
   return (
     <div className="ai-chat-markdown max-w-full overflow-hidden break-words">
@@ -502,6 +514,7 @@ function ChatMarkdown({ content }: { content: string }) {
 }
 
 function ChatMarkdownImage({ src, alt }: { src: string; alt: string }) {
+  const { t } = useI18n();
   const [failed, setFailed] = React.useState(false);
   const trimmedSrc = src.trim();
   const canRender =
@@ -511,7 +524,7 @@ function ChatMarkdownImage({ src, alt }: { src: string; alt: string }) {
   if (!trimmedSrc || failed || !canRender) {
     return (
       <span className="my-2 block rounded-md border border-dashed bg-secondary/40 px-3 py-2 text-xs leading-5 text-muted-foreground">
-        图片无法加载
+        {t("ai.imageUnavailable")}
         {alt ? `：${alt}` : ""}
         {trimmedSrc ? (
           <span className="mt-1 block break-all font-mono text-[11px] opacity-75">
@@ -544,6 +557,7 @@ function ChatCodeBlock({
   ...props
 }: ComponentPropsWithoutRef<"code"> & { language: string }) {
   const [copied, setCopied] = React.useState(false);
+  const { t } = useI18n();
   const code = React.Children.toArray(children).join("").replace(/\n$/, "");
 
   const copyCode = async () => {
@@ -564,7 +578,7 @@ function ChatCodeBlock({
           className="inline-flex h-6 shrink-0 items-center gap-1 rounded-sm border border-white/12 px-2 text-[11px] text-white/70 transition-colors hover:bg-white/10 hover:text-white"
         >
           {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-          {copied ? "已复制" : "复制"}
+          {copied ? t("ai.copied") : t("ai.copy")}
         </button>
       </div>
       <pre className="scrollbar-soft max-w-full overflow-x-auto p-3 text-xs leading-5">

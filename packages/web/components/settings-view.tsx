@@ -58,6 +58,16 @@ export function SettingsView() {
   const setReadingReminderMinutes = useStore(
     (state) => state.setReadingReminderMinutes,
   );
+  const autoSaveIntervalSeconds = useStore(
+    (state) => state.autoSaveIntervalSeconds,
+  );
+  const setAutoSaveIntervalSeconds = useStore(
+    (state) => state.setAutoSaveIntervalSeconds,
+  );
+  const smoothScrollRestore = useStore((state) => state.smoothScrollRestore);
+  const setSmoothScrollRestore = useStore(
+    (state) => state.setSmoothScrollRestore,
+  );
   const locale = useStore((state) => state.locale);
   const setLocale = useStore((state) => state.setLocale);
   const aiConfig = useStore((state) => state.aiConfig);
@@ -326,6 +336,38 @@ export function SettingsView() {
                 setReadingReminderMinutes(Number(event.target.value))
               }
               className="w-full accent-primary"
+            />
+          </label>
+
+          <label className="block">
+            <div className="mb-2 flex items-center justify-between text-sm">
+              <span className="font-medium">{t("settings.autoSaveInterval")}</span>
+              <span className="text-muted-foreground">
+                {t("settings.secondsValue", {
+                  seconds: autoSaveIntervalSeconds,
+                })}
+              </span>
+            </div>
+            <input
+              type="range"
+              min="5"
+              max="60"
+              step="5"
+              value={autoSaveIntervalSeconds}
+              onChange={(event) =>
+                setAutoSaveIntervalSeconds(Number(event.target.value))
+              }
+              className="w-full accent-primary"
+            />
+          </label>
+
+          <label className="flex items-center justify-between gap-4 rounded-md border bg-background px-4 py-3 text-sm">
+            <span className="font-medium">{t("settings.smoothScrollRestore")}</span>
+            <input
+              type="checkbox"
+              checked={smoothScrollRestore}
+              onChange={(event) => setSmoothScrollRestore(event.target.checked)}
+              className="h-4 w-4 accent-primary"
             />
           </label>
 

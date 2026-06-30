@@ -8,6 +8,7 @@ import { Check, Copy } from "lucide-react";
 import { ComponentPropsWithoutRef, CSSProperties } from "react";
 import { cn } from "@/lib/utils";
 import { resolveMarkdownImageSrc } from "@/lib/markdown-images";
+import { useI18n } from "@/lib/i18n";
 
 interface MarkdownReaderProps {
   content: string;
@@ -113,6 +114,7 @@ export function MarkdownReader({
 }
 
 function MarkdownImage({ src, alt }: { src: string; alt: string }) {
+  const { t } = useI18n();
   const [failed, setFailed] = React.useState(false);
 
   if (!src) {
@@ -123,7 +125,7 @@ function MarkdownImage({ src, alt }: { src: string; alt: string }) {
     <span className="my-6 block overflow-hidden rounded-lg border bg-card">
       {failed ? (
         <span className="block bg-muted px-4 py-5 text-sm text-muted-foreground">
-          {alt || "Image"} · {src}
+          {alt || t("reader.imageLabel")} · {src}
         </span>
       ) : (
         <Image
@@ -148,6 +150,7 @@ function CodeBlock({
   ...props
 }: ComponentPropsWithoutRef<"code"> & { language: string }) {
   const [copied, setCopied] = React.useState(false);
+  const { t } = useI18n();
   const text = React.Children.toArray(children).join("").replace(/\n$/, "");
   const highlighted = React.useMemo(
     () => highlightCode(text, language),
@@ -171,7 +174,7 @@ function CodeBlock({
           className="inline-flex h-7 items-center gap-1 rounded-md border bg-background px-2 font-medium transition-colors hover:text-primary"
         >
           {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-          {copied ? "Copied" : "Copy"}
+          {copied ? t("ai.copied") : t("ai.copy")}
         </button>
       </div>
       <div className="grid grid-cols-[auto_minmax(0,1fr)] overflow-hidden">

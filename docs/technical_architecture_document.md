@@ -79,6 +79,10 @@ graph TD
 | `/api/ai/chat/stream`          | AI 流式对话 API    |
 | `/api/ai/config`               | AI 与 RAG 参数配置 API |
 | `/api/books/stats`             | 阅读统计API        |
+| `/api/scan/jobs`               | 启动带进度的扫描任务 |
+| `/api/scan/rescan-known/jobs`  | 启动已知书籍重扫任务 |
+| `/api/scan/jobs/:id`           | 查询扫描任务状态     |
+| `/api/scan/jobs/:id/cancel`    | 取消扫描任务         |
 
 ## 4. API定义
 
@@ -105,6 +109,17 @@ POST /api/scan
   "path": "string"
 }
 ```
+
+**后台扫描任务**
+
+```
+POST /api/scan/jobs
+POST /api/scan/rescan-known/jobs
+GET /api/scan/jobs/:id
+POST /api/scan/jobs/:id/cancel
+```
+
+任务状态包含 `queued`、`scanning`、`indexing`、`cancelled`、`completed`、`failed`。服务会把最近任务状态写入本地 JSON 文件，重启时未完成任务会标记为中断。
 
 ### 4.2 阅读进度API
 

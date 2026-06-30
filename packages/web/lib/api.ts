@@ -12,6 +12,8 @@ import {
   ImportBackupResponse,
   LibraryStats,
   PersistedAiConfig,
+  ScanJobResponse,
+  ScanJobStatus,
   ScanResponse,
   SearchIndexStatus,
   SearchResult,
@@ -124,6 +126,52 @@ export function rescanKnownBooks() {
   return fetchJson<ScanResponse>("/scan/rescan-known", {
     method: "POST",
   });
+}
+
+export function startScanJob(path: string) {
+  return fetchJson<ScanJobResponse>("/scan/jobs", {
+    method: "POST",
+    body: JSON.stringify({ path }),
+  });
+}
+
+export function startRescanKnownBooksJob() {
+  return fetchJson<ScanJobResponse>("/scan/rescan-known/jobs", {
+    method: "POST",
+  });
+}
+
+export function getScanJob(jobId: string) {
+  return fetchJson<ScanJobResponse>(`/scan/jobs/${jobId}`, {
+    cache: "no-store",
+  });
+}
+
+export function cancelScanJob(jobId: string) {
+  return fetchJson<ScanJobResponse>(`/scan/jobs/${jobId}/cancel`, {
+    method: "POST",
+  });
+}
+
+export async function waitForScanJob(
+  jobId: string,
+  onUpdate: (job: ScanJobStatus) => void,
+  intervalMs = 750,
+) {
+  while (true) {
+    const { job } = await getScanJob(jobId);
+    onUpdate(job);
+
+    if (
+      job.phase === "completed" ||
+      job.phase === "failed" ||
+      job.phase === "cancelled"
+    ) {
+      return job;
+    }
+
+    await new Promise((resolve) => window.setTimeout(resolve, intervalMs));
+  }
 }
 
 export function searchLibrary(
