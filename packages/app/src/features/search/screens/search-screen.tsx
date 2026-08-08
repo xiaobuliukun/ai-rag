@@ -25,7 +25,10 @@ export function SearchScreen() {
   const router = useRouter();
   const { colors } = useAppTheme();
   const { settings } = useAppSettings();
-  const api = useMemo(() => createMoxuApi(settings.apiBaseUrl), [settings.apiBaseUrl]);
+  const api = useMemo(
+    () => createMoxuApi(settings.apiBaseUrl, settings.apiAccessToken),
+    [settings.apiAccessToken, settings.apiBaseUrl]
+  );
   const [query, setQuery] = useState("");
   const [type, setType] = useState<SearchResultType>("all");
   const [results, setResults] = useState<SearchResult[]>([]);

@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import type { LibraryStats, UpdateBookRequest } from '@moxu/shared';
+import { ContentIndexService } from '../content/content-index.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 const AVERAGE_READING_CHARS_PER_MINUTE = 450;
@@ -12,7 +13,10 @@ const MAX_COVER_IMAGE_LENGTH = 2_100_000;
 
 @Injectable()
 export class BooksService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private contentIndex: ContentIndexService,
+  ) {}
 
   private withChapterStats<
     T extends { chapters: Array<{ isRead: boolean }>; tags?: string | null },
@@ -155,7 +159,7 @@ export class BooksService {
   async updateBook(id: string, request: UpdateBookRequest) {
     const existing = await this.prisma.book.findUnique({
       where: { id },
-      select: { id: true },
+      select: { id: true, title: true },
     });
 
     if (!existing) {
@@ -191,6 +195,10 @@ export class BooksService {
       },
     });
 
+    if (title && title !== existing.title) {
+      await this.contentIndex.syncBook(id);
+    }
+
     return this.findOne(id);
   }
 
@@ -207,6 +215,7 @@ export class BooksService {
     await this.prisma.book.delete({
       where: { id },
     });
+    await this.contentIndex.removeBook(id);
 
     return { success: true };
   }

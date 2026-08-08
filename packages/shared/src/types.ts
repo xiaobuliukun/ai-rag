@@ -54,6 +54,11 @@ export interface SidebarConfig {
   books: Book[];
 }
 
+export interface ApiConnectionConfig {
+  apiBaseUrl: string;
+  apiAccessToken?: string;
+}
+
 export interface ScanRequest {
   path: string;
 }

@@ -4,17 +4,27 @@ const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const net = require("node:net");
 const path = require("node:path");
+const {
+  createLocalCorsOrigins,
+  createServerEnvironment,
+  createWebEnvironment,
+  findStandaloneServer,
+  loadOrCreateDesktopSecret,
+  parsePort,
+} = require("./runtime.cjs");
 
-const WEB_PORT = Number(process.env.MOXU_WEB_PORT || 3000);
-const API_PORT = Number(process.env.MOXU_API_PORT || 3001);
+const WEB_PORT = parsePort(process.env.MOXU_WEB_PORT, 3000, "MOXU_WEB_PORT");
+const API_PORT = parsePort(process.env.MOXU_API_PORT, 3001, "MOXU_API_PORT");
 const HOST = "127.0.0.1";
 const WEB_URL = `http://${HOST}:${WEB_PORT}`;
+const API_BASE_URL = `http://${HOST}:${API_PORT}/api`;
 
 let mainWindow;
 let tray;
 let serverProcess;
 let webProcess;
 let isQuitting = false;
+let servicesReady = false;
 
 app.setName("墨序");
 app.setLoginItemSettings({
@@ -37,7 +47,7 @@ app.whenReady().then(async () => {
   createWindow();
   void loadWhenReady();
   void checkForUpdatesIfConfigured();
-});
+}).catch(handleStartupFailure);
 
 app.on("before-quit", () => {
   isQuitting = true;
@@ -65,6 +75,7 @@ function createWindow() {
     show: false,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
+      additionalArguments: [`--moxu-api-base-url=${API_BASE_URL}`],
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -156,13 +167,46 @@ function createTrayImage() {
 }
 
 async function startServices() {
-  serverProcess = startProcess("server", getServerCommand());
+  if (WEB_PORT === API_PORT) {
+    throw new Error("MOXU_WEB_PORT and MOXU_API_PORT must use different ports.");
+  }
+  await Promise.all([
+    assertPortAvailable(WEB_PORT, "Web"),
+    assertPortAvailable(API_PORT, "API"),
+  ]);
+
+  const serverCommand = getServerCommand();
+
+  if (app.isPackaged) {
+    await migrateDatabase(serverCommand.env);
+  }
+
+  serverProcess = startProcess("server", serverCommand);
   webProcess = startProcess("web", getWebCommand());
 
-  await Promise.all([
-    waitForPort(API_PORT, 45_000),
-    waitForPort(WEB_PORT, 45_000),
-  ]);
+  try {
+    await Promise.all([
+      waitForHttpService(
+        "API",
+        serverProcess,
+        API_BASE_URL + "/health",
+        45_000,
+        async (response) =>
+          response.ok && (await response.json())?.status === "ok",
+      ),
+      waitForHttpService(
+        "Web",
+        webProcess,
+        WEB_URL,
+        45_000,
+        async (response) => response.ok,
+      ),
+    ]);
+    servicesReady = true;
+  } catch (error) {
+    stopServices();
+    throw error;
+  }
 }
 
 function startProcess(name, command) {
@@ -170,17 +214,26 @@ function startProcess(name, command) {
     cwd: command.cwd,
     env: command.env,
     stdio: "pipe",
-    shell: process.platform === "win32",
+    shell: !app.isPackaged && process.platform === "win32",
   });
 
   child.stdout.on("data", (chunk) => console.log(`[${name}] ${chunk}`.trimEnd()));
   child.stderr.on("data", (chunk) => console.error(`[${name}] ${chunk}`.trimEnd()));
+  child.on("error", (error) => {
+    child.moxuStartupError = error;
+    if (!isQuitting && servicesReady) {
+      console.error(`[${name}] failed to start`, error);
+      showServiceError(name, undefined, error.message);
+    }
+  });
   child.on("exit", (code, signal) => {
     if (isQuitting) {
       return;
     }
     console.error(`[${name}] exited ${signal || code}`);
-    showServiceError(name, code, signal);
+    if (servicesReady) {
+      showServiceError(name, code, signal);
+    }
   });
   return child;
 }
@@ -191,20 +244,23 @@ function getServerCommand() {
       command: "npm",
       args: ["run", "dev:server"],
       cwd: projectRoot(),
-      env: serviceEnv(),
+      env: developmentServerEnvironment(),
     };
   }
 
+  const userDataPath = app.getPath("userData");
+  const configuredSecret = process.env.AI_CONFIG_SECRET?.trim();
+
   return nodeCommand(path.join(appRoot(), "packages/server/dist/src/main.js"), [], {
     cwd: appRoot(),
-    env: serviceEnv({
-      NODE_ENV: "production",
-      DATABASE_URL:
-        process.env.DATABASE_URL ||
-        `file:${path.join(app.getPath("userData"), "moxu.db")}`,
-      SCAN_JOBS_FILE:
-        process.env.SCAN_JOBS_FILE ||
-        path.join(app.getPath("userData"), "scan-jobs.json"),
+    env: createServerEnvironment({
+      baseEnvironment: process.env,
+      host: HOST,
+      apiPort: API_PORT,
+      webPort: WEB_PORT,
+      userDataPath,
+      aiConfigSecret:
+        configuredSecret || loadOrCreateDesktopSecret(userDataPath),
     }),
   });
 }
@@ -215,19 +271,96 @@ function getWebCommand() {
       command: "npm",
       args: ["run", "dev:web"],
       cwd: projectRoot(),
-      env: serviceEnv({
-        NEXT_PUBLIC_API_BASE_URL: `http://${HOST}:${API_PORT}/api`,
-      }),
+      env: developmentWebEnvironment(),
     };
   }
 
-  const nextBin = path.join(appRoot(), "node_modules/next/dist/bin/next");
-  return nodeCommand(nextBin, ["start", "packages/web", "--hostname", HOST, "--port", String(WEB_PORT)], {
-    cwd: appRoot(),
-    env: serviceEnv({
-      NODE_ENV: "production",
-      NEXT_PUBLIC_API_BASE_URL: `http://${HOST}:${API_PORT}/api`,
+  const standaloneEntry = findStandaloneServer(appRoot());
+  return nodeCommand(standaloneEntry, [], {
+    cwd: path.dirname(standaloneEntry),
+    env: createWebEnvironment({
+      baseEnvironment: process.env,
+      host: HOST,
+      webPort: WEB_PORT,
+      apiPort: API_PORT,
     }),
+  });
+}
+
+async function migrateDatabase(serverEnvironment) {
+  fs.mkdirSync(app.getPath("userData"), { recursive: true });
+
+  const migrationCommand = nodeCommand(
+    path.join(appRoot(), "node_modules/prisma/build/index.js"),
+    [
+      "migrate",
+      "deploy",
+      "--config",
+      path.join(appRoot(), "packages/server/prisma.config.ts"),
+      "--schema",
+      path.join(appRoot(), "packages/server/prisma/schema.prisma"),
+    ],
+    {
+      cwd: path.join(appRoot(), "packages/server"),
+      env: {
+        ...serverEnvironment,
+        // Prisma 7.5's SQLite schema engine can exit before returning its first
+        // response unless its logger is initialized. Keep the scope limited to
+        // the one-shot migration process.
+        RUST_LOG: serverEnvironment.RUST_LOG
+          ? `${serverEnvironment.RUST_LOG},schema_engine=info`
+          : "schema_engine=info",
+      },
+    },
+  );
+
+  await runOneShotProcess("database migration", migrationCommand);
+}
+
+function runOneShotProcess(name, command) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command.command, command.args, {
+      cwd: command.cwd,
+      env: command.env,
+      stdio: "pipe",
+      shell: false,
+    });
+    let output = "";
+    let settled = false;
+
+    const appendOutput = (chunk, log) => {
+      const text = String(chunk);
+      output = `${output}${text}`.slice(-12_000);
+      log(`[${name}] ${text}`.trimEnd());
+    };
+
+    child.stdout.on("data", (chunk) => appendOutput(chunk, console.log));
+    child.stderr.on("data", (chunk) => appendOutput(chunk, console.error));
+    child.on("error", (error) => {
+      if (!settled) {
+        settled = true;
+        reject(new Error(`Unable to start ${name}: ${error.message}`));
+      }
+    });
+    child.on("exit", (code, signal) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+
+      if (code === 0) {
+        resolve();
+        return;
+      }
+
+      const reason = signal ? `signal ${signal}` : `exit code ${code}`;
+      reject(
+        new Error(
+          `Database migration failed (${reason}). The application was not started.` +
+            (output.trim() ? `\n\n${output.trim()}` : ""),
+        ),
+      );
+    });
   });
 }
 
@@ -243,14 +376,30 @@ function nodeCommand(script, args = [], options = {}) {
   };
 }
 
-function serviceEnv(extra = {}) {
+function developmentServerEnvironment() {
   return {
     ...process.env,
     HOST,
     PORT: String(API_PORT),
     NEXT_TELEMETRY_DISABLED: "1",
     ALLOW_REMOTE_API: "false",
-    ...extra,
+    CORS_ORIGINS:
+      process.env.CORS_ORIGINS ||
+      process.env.CORS_ORIGIN ||
+      createLocalCorsOrigins(HOST, WEB_PORT),
+  };
+}
+
+function developmentWebEnvironment() {
+  return {
+    ...process.env,
+    HOST,
+    HOSTNAME: HOST,
+    PORT: String(WEB_PORT),
+    MOXU_API_HOST: HOST,
+    MOXU_API_PORT: String(API_PORT),
+    NEXT_TELEMETRY_DISABLED: "1",
+    NEXT_PUBLIC_API_BASE_URL: API_BASE_URL,
   };
 }
 
@@ -284,26 +433,69 @@ function stopServices() {
   }
 }
 
-function waitForPort(port, timeoutMs) {
-  const startedAt = Date.now();
+function assertPortAvailable(port, name) {
   return new Promise((resolve, reject) => {
-    const attempt = () => {
-      const socket = net.connect({ host: HOST, port });
-      socket.once("connect", () => {
-        socket.end();
-        resolve();
-      });
-      socket.once("error", () => {
-        socket.destroy();
-        if (Date.now() - startedAt > timeoutMs) {
-          reject(new Error(`Timed out waiting for ${HOST}:${port}`));
-          return;
+    const probe = net.createServer();
+    probe.unref();
+    probe.once("error", (error) => {
+      const detail =
+        error && error.code === "EADDRINUSE"
+          ? name + " port " + port + " is already in use."
+          : "Unable to reserve " + name + " port " + port + ": " + error.message;
+      reject(new Error(detail));
+    });
+    probe.listen({ host: HOST, port, exclusive: true }, () => {
+      probe.close((error) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
         }
-        setTimeout(attempt, 350);
       });
-    };
-    attempt();
+    });
   });
+}
+
+async function waitForHttpService(
+  name,
+  child,
+  url,
+  timeoutMs,
+  validateResponse,
+) {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt <= timeoutMs) {
+    if (child.moxuStartupError) {
+      throw new Error(
+        name + " service failed to start: " + child.moxuStartupError.message,
+      );
+    }
+    if (child.exitCode !== null || child.signalCode) {
+      throw new Error(
+        name +
+          " service exited before it became ready (" +
+          (child.signalCode || child.exitCode) +
+          ").",
+      );
+    }
+
+    try {
+      const response = await fetch(url, {
+        cache: "no-store",
+        signal: AbortSignal.timeout(2_000),
+      });
+      if (await validateResponse(response)) {
+        return;
+      }
+    } catch {
+      // The process can accept TCP before its HTTP routes are ready.
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 350));
+  }
+
+  throw new Error("Timed out waiting for " + name + " service at " + url + ".");
 }
 
 function configureAutoUpdater() {
@@ -367,15 +559,32 @@ async function checkForUpdatesManually() {
 }
 
 function showServiceError(name, code, signal) {
-  if (!mainWindow) {
-    return;
-  }
-
-  void dialog.showMessageBox(mainWindow, {
+  const options = {
     type: "error",
     message: "墨序服务已退出",
     detail: `${name} exited with ${signal || code}. Please restart the app.`,
-  });
+  };
+
+  void (mainWindow
+    ? dialog.showMessageBox(mainWindow, options)
+    : dialog.showMessageBox(options));
+}
+
+async function handleStartupFailure(error) {
+  isQuitting = true;
+  stopServices();
+  const detail = error instanceof Error ? error.message : String(error);
+  console.error("[desktop] startup failed", error);
+
+  try {
+    await dialog.showMessageBox({
+      type: "error",
+      message: "墨序启动失败",
+      detail,
+    });
+  } finally {
+    app.exit(1);
+  }
 }
 
 function projectRoot() {

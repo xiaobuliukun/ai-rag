@@ -3,6 +3,10 @@ import { BackupService } from './backup.service';
 
 describe('BackupService', () => {
   it('merges imported books by path and rebuilds affected indexes', async () => {
+    type AiConfigUpsertArgs = {
+      update: { apiKey?: string | null };
+      create: { apiKey: string | null };
+    };
     const tx = {
       book: {
         findUnique: jest.fn(({ where }: { where: Record<string, unknown> }) => {
@@ -36,7 +40,7 @@ describe('BackupService', () => {
         upsert: jest.fn(),
       },
       aiConfig: {
-        upsert: jest.fn(),
+        upsert: jest.fn<unknown, [AiConfigUpsertArgs]>(),
       },
     };
     const prisma = {
@@ -91,6 +95,18 @@ describe('BackupService', () => {
           createdAt: '2026-06-26T00:00:00.000Z',
         },
       ],
+      aiConfig: {
+        id: 'default',
+        mode: 'openai-compatible',
+        baseUrl: 'https://api.example.test/v1',
+        model: 'chat-model',
+        apiKey: undefined,
+        embeddingProvider: 'local',
+        embeddingModel: 'local-hash-v1',
+        ragSourceCount: 5,
+        ragContextChars: 12000,
+        ragExcerptChars: 520,
+      },
     };
 
     const result = await service.importBackup({ payload, mode: 'merge' });
@@ -154,6 +170,9 @@ describe('BackupService', () => {
         createdAt: new Date('2026-06-26T00:00:00.000Z'),
       },
     });
+    const aiConfigUpsert = tx.aiConfig.upsert.mock.calls[0]?.[0];
+    expect(aiConfigUpsert.update).not.toHaveProperty('apiKey');
+    expect(aiConfigUpsert.create.apiKey).toBeNull();
     expect(contentIndex.syncBook).toHaveBeenCalledWith('existing-book');
   });
 });

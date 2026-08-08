@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import Image from "next/image";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Check, Copy } from "lucide-react";
@@ -9,6 +8,7 @@ import { ComponentPropsWithoutRef, CSSProperties } from "react";
 import { cn } from "@/lib/utils";
 import { resolveMarkdownImageSrc } from "@/lib/markdown-images";
 import { useI18n } from "@/lib/i18n";
+import { ApiImage } from "@/components/api-image";
 
 interface MarkdownReaderProps {
   content: string;
@@ -128,13 +128,14 @@ function MarkdownImage({ src, alt }: { src: string; alt: string }) {
           {alt || t("reader.imageLabel")} · {src}
         </span>
       ) : (
-        <Image
+        <ApiImage
           src={src}
           alt={alt}
           width={960}
           height={540}
           sizes="(max-width: 768px) 100vw, 768px"
           unoptimized
+          onAuthenticatedError={() => setFailed(true)}
           onError={() => setFailed(true)}
           className="h-auto w-full object-contain"
         />

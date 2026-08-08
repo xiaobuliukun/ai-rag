@@ -16,9 +16,21 @@ import { createMoxuApi } from "@/infrastructure/api/moxu-api";
 
 export function SettingsScreen() {
   const { colors } = useAppTheme();
-  const { settings, setApiBaseUrl, setAiConfig, resetSettings } = useAppSettings();
-  const api = useMemo(() => createMoxuApi(settings.apiBaseUrl), [settings.apiBaseUrl]);
+  const {
+    settings,
+    setApiBaseUrl,
+    setApiAccessToken,
+    setAiConfig,
+    resetSettings
+  } = useAppSettings();
+  const api = useMemo(
+    () => createMoxuApi(settings.apiBaseUrl, settings.apiAccessToken),
+    [settings.apiAccessToken, settings.apiBaseUrl]
+  );
   const [apiBaseUrl, setApiBaseUrlDraft] = useState(settings.apiBaseUrl);
+  const [apiAccessToken, setApiAccessTokenDraft] = useState(
+    settings.apiAccessToken ?? ""
+  );
   const [aiConfig, setAiConfigDraft] = useState<AiRuntimeConfig>(settings.aiConfig);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -27,8 +39,9 @@ export function SettingsScreen() {
 
   useEffect(() => {
     setApiBaseUrlDraft(settings.apiBaseUrl);
+    setApiAccessTokenDraft(settings.apiAccessToken ?? "");
     setAiConfigDraft(settings.aiConfig);
-  }, [settings.aiConfig, settings.apiBaseUrl]);
+  }, [settings.aiConfig, settings.apiAccessToken, settings.apiBaseUrl]);
 
   useEffect(() => {
     let cancelled = false;
@@ -68,7 +81,7 @@ export function SettingsScreen() {
     setStatus(null);
     setError(null);
     try {
-      await createMoxuApi(apiBaseUrl).getStatus();
+      await createMoxuApi(apiBaseUrl, apiAccessToken).getStatus();
       setStatus("连接成功");
     } catch (err) {
       setError(err instanceof Error ? err.message : "连接失败");
@@ -84,7 +97,11 @@ export function SettingsScreen() {
 
     try {
       await setApiBaseUrl(apiBaseUrl);
-      const saved = await createMoxuApi(apiBaseUrl).saveAIConfig(aiConfig);
+      await setApiAccessToken(apiAccessToken);
+      const saved = await createMoxuApi(
+        apiBaseUrl,
+        apiAccessToken
+      ).saveAIConfig(aiConfig);
       await setAiConfig({
         mode: saved.mode,
         baseUrl: saved.baseUrl,
@@ -130,6 +147,15 @@ export function SettingsScreen() {
               autoCapitalize="none"
               autoCorrect={false}
               placeholder="http://127.0.0.1:3001/api"
+            />
+            <LabeledField
+              label="API 访问令牌（可选）"
+              value={apiAccessToken}
+              onChangeText={setApiAccessTokenDraft}
+              autoCapitalize="none"
+              autoCorrect={false}
+              secureTextEntry
+              placeholder="与服务端 API_ACCESS_TOKEN 一致"
             />
             <View style={styles.buttonRow}>
               <Button

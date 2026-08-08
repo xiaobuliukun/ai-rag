@@ -4,6 +4,8 @@ node_modules
 # build outputs
 dist
 build
+!packages/desktop/build/
+!packages/desktop/build/entitlements.mac.plist
 .next
 out
 release

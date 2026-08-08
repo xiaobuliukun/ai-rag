@@ -16,11 +16,23 @@ export function encryptSecret(value?: string | null) {
   }
 
   if (plaintext.startsWith(SECRET_PREFIX)) {
-    return plaintext;
+    const primaryKey = encryptionKeys()[0];
+    if (decryptWithKey(plaintext, primaryKey) !== undefined) {
+      return plaintext;
+    }
+
+    const legacyPlaintext = decryptSecret(plaintext);
+    return legacyPlaintext === undefined
+      ? plaintext
+      : encryptPlaintext(legacyPlaintext, primaryKey);
   }
 
+  return encryptPlaintext(plaintext, encryptionKeys()[0]);
+}
+
+function encryptPlaintext(plaintext: string, key: Buffer) {
   const iv = randomBytes(IV_LENGTH);
-  const cipher = createCipheriv(ALGORITHM, encryptionKey(), iv);
+  const cipher = createCipheriv(ALGORITHM, key, iv);
   const encrypted = Buffer.concat([
     cipher.update(plaintext, 'utf8'),
     cipher.final(),
@@ -41,6 +53,17 @@ export function decryptSecret(value?: string | null) {
     return value;
   }
 
+  for (const key of encryptionKeys()) {
+    const plaintext = decryptWithKey(value, key);
+    if (plaintext !== undefined) {
+      return plaintext;
+    }
+  }
+
+  return undefined;
+}
+
+function decryptWithKey(value: string, key: Buffer) {
   try {
     const [ivPart, tagPart, encryptedPart] = value
       .slice(SECRET_PREFIX.length)
@@ -49,11 +72,7 @@ export function decryptSecret(value?: string | null) {
       return undefined;
     }
 
-    const decipher = createDecipheriv(
-      ALGORITHM,
-      encryptionKey(),
-      fromBase64Url(ivPart),
-    );
+    const decipher = createDecipheriv(ALGORITHM, key, fromBase64Url(ivPart));
     decipher.setAuthTag(fromBase64Url(tagPart));
 
     return Buffer.concat([
@@ -65,13 +84,18 @@ export function decryptSecret(value?: string | null) {
   }
 }
 
-function encryptionKey() {
-  const secret =
-    process.env.AI_CONFIG_SECRET ??
-    process.env.DATABASE_URL ??
-    'moxu-local-ai-config';
+function encryptionKeys() {
+  const secrets = Array.from(
+    new Set(
+      [
+        process.env.AI_CONFIG_SECRET,
+        process.env.DATABASE_URL,
+        'moxu-local-ai-config',
+      ].filter((secret): secret is string => secret !== undefined),
+    ),
+  );
 
-  return createHash('sha256').update(secret).digest();
+  return secrets.map((secret) => createHash('sha256').update(secret).digest());
 }
 
 function toBase64Url(value: Buffer) {

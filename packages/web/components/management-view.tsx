@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import Image from "next/image";
 import Link from "next/link";
 import { useTheme } from "next-themes";
 import {
@@ -44,6 +43,14 @@ import {
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { useStore } from "@/store/useStore";
+import { ApiImage } from "@/components/api-image";
+import {
+  mergePersistedPreferenceState,
+  parseStoredPreferences,
+  sanitizeClientPreferences,
+  sanitizeStoredPreferences,
+} from "@/lib/client-preferences";
+import { buildBookmarkReaderHref } from "@/lib/reader-scroll";
 
 const LIBRARY_REFRESH_EVENT = "library:refresh";
 const MAX_COVER_IMAGE_SIZE = 1_500_000;
@@ -294,7 +301,13 @@ export function ManagementView() {
     setError(null);
 
     try {
-      const payload = JSON.parse(await file.text()) as BackupPayload;
+      const parsedPayload = JSON.parse(await file.text()) as BackupPayload;
+      const payload = {
+        ...parsedPayload,
+        clientPreferences: sanitizeClientPreferences(
+          parsedPayload.clientPreferences,
+        ),
+      } satisfies BackupPayload;
       const result = await importBackup(payload, importMode);
       applyClientPreferences(payload.clientPreferences, setTheme);
       setStatus(result.message);
@@ -608,7 +621,7 @@ export function ManagementView() {
                   <div className="w-full max-w-40 overflow-hidden rounded-lg border bg-background md:max-w-none">
                     <div className="flex aspect-[3/4] items-center justify-center bg-muted">
                       {coverSrc ? (
-                        <Image
+                        <ApiImage
                           src={coverSrc}
                           alt={selectedBook.title}
                           width={320}
@@ -642,7 +655,11 @@ export function ManagementView() {
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                           <Link
-                            href={`/book/${bookmark.bookId}/${bookmark.chapterId}`}
+                            href={buildBookmarkReaderHref(
+                              bookmark.bookId,
+                              bookmark.chapterId,
+                              bookmark.position,
+                            )}
                             className="font-medium transition-colors hover:text-primary"
                           >
                             {bookmark.note}
@@ -854,60 +871,43 @@ function readFileAsDataUrl(file: File) {
 }
 
 function readClientPreferences(): ClientPreferencesBackup {
-  return {
-    moxuPreferences: parseStoredJson(localStorage.getItem("moxu-preferences")),
-    theme: localStorage.getItem("theme"),
-  };
+  return (
+    sanitizeClientPreferences({
+      moxuPreferences: parseStoredPreferences(
+        localStorage.getItem("moxu-preferences"),
+      ),
+      theme: localStorage.getItem("theme"),
+    }) ?? {}
+  );
 }
 
 function applyClientPreferences(
   preferences: ClientPreferencesBackup | null | undefined,
   setTheme: (theme: string) => void,
 ) {
-  if (!preferences) {
+  const sanitizedPreferences = sanitizeClientPreferences(preferences);
+  if (!sanitizedPreferences) {
     return;
   }
 
-  writeStoredJson("moxu-preferences", preferences.moxuPreferences);
-  applyMoxuPreferenceState(preferences.moxuPreferences);
-  if (typeof preferences.theme === "string") {
-    localStorage.setItem("theme", preferences.theme);
-    setTheme(preferences.theme);
-  }
-}
-
-function parseStoredJson(value: string | null) {
-  if (!value) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return value;
-  }
-}
-
-function writeStoredJson(key: string, value: unknown) {
-  if (value === undefined || value === null) {
-    return;
-  }
-
-  localStorage.setItem(
-    key,
-    typeof value === "string" ? value : JSON.stringify(value),
+  const storedPreferences = sanitizeStoredPreferences(
+    sanitizedPreferences.moxuPreferences,
   );
+  if (storedPreferences) {
+    localStorage.setItem(
+      "moxu-preferences",
+      JSON.stringify(storedPreferences),
+    );
+    applyMoxuPreferenceState(storedPreferences.state);
+  }
+  if (typeof sanitizedPreferences.theme === "string") {
+    localStorage.setItem("theme", sanitizedPreferences.theme);
+    setTheme(sanitizedPreferences.theme);
+  }
 }
 
-function applyMoxuPreferenceState(value: unknown) {
-  if (!value || typeof value !== "object") {
-    return;
-  }
-
-  const state = (value as { state?: unknown }).state;
-  if (!state || typeof state !== "object") {
-    return;
-  }
-
-  useStore.setState(state as Partial<ReturnType<typeof useStore.getState>>);
+function applyMoxuPreferenceState(state: unknown) {
+  useStore.setState(
+    mergePersistedPreferenceState(useStore.getState(), state),
+  );
 }

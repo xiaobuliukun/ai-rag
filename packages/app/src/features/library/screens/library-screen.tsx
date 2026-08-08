@@ -1,17 +1,24 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Image,
   RefreshControl,
   ScrollView,
   StyleSheet,
   View
 } from "react-native";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { AlertCircle, BookOpen, FolderSearch, RefreshCw, X } from "lucide-react-native";
-import type { Book, LibraryStats, ScanJobStatus } from "@moxu/shared";
+import type {
+  Book,
+  LibraryStats,
+  ScanJobStatus,
+  SearchIndexStatus
+} from "@moxu/shared";
 import { useAppTheme } from "@/application/providers/root-providers";
 import { useAppSettings } from "@/application/settings/settings-provider";
 import { Button, AppText, Card, Field, Screen, SectionHeader } from "@/design-system/ui/primitives";
+import { resolveBookCoverSource } from "@/infrastructure/api/book-assets";
 import { createMoxuApi } from "@/infrastructure/api/moxu-api";
 import { formatDate, formatMinutes } from "@/shared/utils/date";
 import { getBookProgress } from "@/domains/library/models";
@@ -20,9 +27,13 @@ export function LibraryScreen() {
   const router = useRouter();
   const { colors } = useAppTheme();
   const { settings } = useAppSettings();
-  const api = useMemo(() => createMoxuApi(settings.apiBaseUrl), [settings.apiBaseUrl]);
+  const api = useMemo(
+    () => createMoxuApi(settings.apiBaseUrl, settings.apiAccessToken),
+    [settings.apiAccessToken, settings.apiBaseUrl]
+  );
   const [books, setBooks] = useState<Book[]>([]);
   const [stats, setStats] = useState<LibraryStats | null>(null);
+  const [indexStatus, setIndexStatus] = useState<SearchIndexStatus | null>(null);
   const [scanPath, setScanPath] = useState("");
   const [scanJob, setScanJob] = useState<ScanJobStatus | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -33,24 +44,29 @@ export function LibraryScreen() {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [nextBooks, nextStats] = await Promise.all([
+      const [nextBooks, nextStats, nextIndexStatus] = await Promise.all([
         api.getBooks(),
-        api.getLibraryStats().catch(() => null)
+        api.getLibraryStats().catch(() => null),
+        api.getSearchIndexStatus().catch(() => null)
       ]);
       setBooks(nextBooks);
       setStats(nextStats);
+      setIndexStatus(nextIndexStatus);
     } catch (err) {
       setBooks([]);
       setStats(null);
+      setIndexStatus(null);
       setError(err instanceof Error ? err.message : "无法连接墨序服务");
     } finally {
       setIsLoading(false);
     }
   }, [api]);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load])
+  );
 
   const handleScan = async () => {
     const path = scanPath.trim();
@@ -86,6 +102,27 @@ export function LibraryScreen() {
 
     const { job } = await api.cancelScanJob(scanJob.id);
     setScanJob(job);
+  };
+
+  const handleRescan = async () => {
+    setIsScanning(true);
+    setStatus(null);
+    setError(null);
+
+    try {
+      const { job } = await api.startRescanKnownBooksJob();
+      setScanJob(job);
+      const completed = await api.waitForScanJob(job.id, setScanJob);
+      if (completed.phase === "failed") {
+        throw new Error(completed.error ?? completed.message);
+      }
+      setStatus(completed.message);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "重扫失败");
+    } finally {
+      setIsScanning(false);
+    }
   };
 
   const readingMinutes = stats
@@ -146,6 +183,21 @@ export function LibraryScreen() {
               onPress={handleScan}
               icon={<FolderSearch color={colors.primaryForeground} size={18} />}
             />
+          </View>
+          <View style={styles.scanActions}>
+            <Button
+              title="重扫已添加书籍"
+              variant="secondary"
+              disabled={isScanning || books.length === 0}
+              icon={<RefreshCw color={colors.foreground} size={16} />}
+              onPress={() => void handleRescan()}
+            />
+            {indexStatus ? (
+              <AppText variant="caption" tone="muted" style={styles.indexStatus}>
+                索引：{indexStatus.ftsChunks}/{indexStatus.totalChunks} 全文，
+                {indexStatus.vectorChunks}/{indexStatus.totalChunks} 向量
+              </AppText>
+            ) : null}
           </View>
           {scanJob && isScanning ? (
             <View style={[styles.jobBox, { backgroundColor: colors.surfaceMuted }]}>
@@ -246,14 +298,39 @@ function StatCard({ label, value }: { label: string; value: string }) {
 
 function BookCard({ book, onPress }: { book: Book; onPress: () => void }) {
   const { colors } = useAppTheme();
+  const { settings } = useAppSettings();
   const progress = getBookProgress(book);
+  const coverSource = useMemo(
+    () =>
+      resolveBookCoverSource({
+        apiBaseUrl: settings.apiBaseUrl,
+        apiAccessToken: settings.apiAccessToken,
+        bookId: book.id,
+        coverImage: book.coverImage
+      }),
+    [
+      book.coverImage,
+      book.id,
+      settings.apiAccessToken,
+      settings.apiBaseUrl
+    ]
+  );
 
   return (
     <Card>
       <View style={styles.bookHeader}>
-        <View style={[styles.bookIcon, { backgroundColor: colors.accentMuted }]}>
-          <BookOpen color={colors.accent} size={20} />
-        </View>
+        {coverSource ? (
+          <Image
+            source={coverSource}
+            accessibilityLabel={`${book.title} 封面`}
+            resizeMode="cover"
+            style={[styles.bookCover, { backgroundColor: colors.accentMuted }]}
+          />
+        ) : (
+          <View style={[styles.bookIcon, { backgroundColor: colors.accentMuted }]}>
+            <BookOpen color={colors.accent} size={20} />
+          </View>
+        )}
         <View style={styles.bookTitleBox}>
           <AppText variant="subtitle" numberOfLines={1}>
             {book.title}
@@ -330,6 +407,16 @@ const styles = StyleSheet.create({
   scanField: {
     flex: 1
   },
+  scanActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 10
+  },
+  indexStatus: {
+    flex: 1,
+    minWidth: 180
+  },
   jobBox: {
     flexDirection: "row",
     alignItems: "center",
@@ -371,6 +458,11 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: "center",
     justifyContent: "center"
+  },
+  bookCover: {
+    width: 44,
+    height: 58,
+    borderRadius: 8
   },
   bookTitleBox: {
     flex: 1,

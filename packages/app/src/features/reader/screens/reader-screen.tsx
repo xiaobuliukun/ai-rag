@@ -1,19 +1,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  AppState,
   Image,
   ScrollView,
   StyleSheet,
   View,
+  type LayoutChangeEvent,
   type NativeScrollEvent,
   type NativeSyntheticEvent
 } from "react-native";
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { ArrowLeft, Bot, CheckCircle2, Save } from "lucide-react-native";
-import type { Book, Chapter } from "@moxu/shared";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
+import {
+  ArrowLeft,
+  BookmarkPlus,
+  Bot,
+  CheckCircle2,
+  Save,
+  Trash2
+} from "lucide-react-native";
+import type { AiContext, Book, Bookmark, Chapter } from "@moxu/shared";
 import { useAppTheme } from "@/application/providers/root-providers";
 import { useAppSettings } from "@/application/settings/settings-provider";
-import { AppText, Button, Card, Screen } from "@/design-system/ui/primitives";
+import { AppText, Button, Card, Field, Screen } from "@/design-system/ui/primitives";
 import {
   parseMarkdown,
   resolveMarkdownImageSrc,
@@ -29,73 +38,197 @@ export function ReaderScreen() {
     bookId: string;
     chapterId: string;
   }>();
-  const api = useMemo(() => createMoxuApi(settings.apiBaseUrl), [settings.apiBaseUrl]);
+  const api = useMemo(
+    () => createMoxuApi(settings.apiBaseUrl, settings.apiAccessToken),
+    [settings.apiAccessToken, settings.apiBaseUrl]
+  );
   const [book, setBook] = useState<Book | null>(null);
   const [chapter, setChapter] = useState<Chapter | null>(null);
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
+  const [bookmarkNote, setBookmarkNote] = useState("");
   const [progress, setProgress] = useState(0);
   const [savedProgress, setSavedProgress] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const scrollRef = useRef<ScrollView>(null);
+  const scrollPositionRef = useRef(0);
+  const contentHeightRef = useRef(0);
+  const viewportHeightRef = useRef(0);
+  const scrollableHeightRef = useRef(0);
+  const pendingRestoreRef = useRef<number | null>(null);
+  const progressRef = useRef(0);
+  const currentScrollProgressRef = useRef(0);
   const lastSavedRef = useRef(0);
+  const lastSavedPositionRef = useRef(0);
+  const pendingReadingSecondsRef = useRef(0);
+  const lastReadingTickRef = useRef(Date.now());
+  const appStateRef = useRef(AppState.currentState);
+  const isReaderFocusedRef = useRef(false);
+  const isChapterReadyRef = useRef(false);
+  const readingContextRef = useRef<AiContext | undefined>(undefined);
+  const loadGenerationRef = useRef(0);
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const queuedSaveCountRef = useRef(0);
 
   const load = useCallback(async () => {
+    const generation = loadGenerationRef.current + 1;
+    loadGenerationRef.current = generation;
     if (!bookId || !chapterId) {
+      setIsLoading(false);
       return;
     }
 
+    isChapterReadyRef.current = false;
+    readingContextRef.current = undefined;
+    setReadingContext(undefined);
+    setBook(null);
+    setChapter(null);
+    setBookmarks([]);
+    setIsLoading(true);
     setError(null);
     try {
-      const [nextBook, nextChapter] = await Promise.all([
+      const [nextBook, nextChapter, nextBookmarks] = await Promise.all([
         api.getBook(bookId),
-        api.getChapter(bookId, chapterId)
+        api.getChapter(bookId, chapterId),
+        api.getBookmarks(bookId, chapterId).catch(() => [])
       ]);
+      if (generation !== loadGenerationRef.current) {
+        return;
+      }
       setBook(nextBook);
       setChapter(nextChapter);
+      setBookmarks(nextBookmarks);
       const initialProgress = Math.round(nextChapter.progress ?? 0);
       setProgress(initialProgress);
+      progressRef.current = initialProgress;
+      currentScrollProgressRef.current = 0;
       setSavedProgress(initialProgress);
       lastSavedRef.current = initialProgress;
-      setReadingContext({
+      const initialScrollPosition = Math.max(
+        0,
+        nextChapter.readingProgress?.scrollPosition ?? 0
+      );
+      scrollPositionRef.current = initialScrollPosition;
+      lastSavedPositionRef.current = initialScrollPosition;
+      pendingRestoreRef.current = initialScrollPosition;
+      pendingReadingSecondsRef.current = 0;
+      lastReadingTickRef.current = Date.now();
+      isChapterReadyRef.current = true;
+      const nextReadingContext = {
         bookId: nextBook.id,
         chapterId: nextChapter.id,
         bookTitle: nextBook.title,
         chapterTitle: nextChapter.title
-      });
+      };
+      readingContextRef.current = nextReadingContext;
+      setReadingContext(nextReadingContext);
     } catch (err) {
+      if (generation !== loadGenerationRef.current) {
+        return;
+      }
+      isChapterReadyRef.current = false;
+      readingContextRef.current = undefined;
+      setReadingContext(undefined);
+      setBook(null);
+      setChapter(null);
+      setBookmarks([]);
+      pendingRestoreRef.current = null;
       setError(err instanceof Error ? err.message : "无法打开章节");
     } finally {
-      setIsLoading(false);
+      if (generation === loadGenerationRef.current) {
+        setIsLoading(false);
+      }
     }
   }, [api, bookId, chapterId, setReadingContext]);
 
   useEffect(() => {
     void load();
-    return () => setReadingContext(undefined);
+    return () => {
+      loadGenerationRef.current += 1;
+      isChapterReadyRef.current = false;
+      readingContextRef.current = undefined;
+      setReadingContext(undefined);
+    };
   }, [load, setReadingContext]);
 
   const blocks = useMemo(() => parseMarkdown(chapter?.content ?? ""), [chapter?.content]);
 
+  const recordReadingTime = useCallback(() => {
+    const now = Date.now();
+    const elapsedSeconds = Math.min(
+      30,
+      Math.max(0, Math.floor((now - lastReadingTickRef.current) / 1000))
+    );
+    lastReadingTickRef.current = now;
+
+    if (
+      !isChapterReadyRef.current ||
+      !isReaderFocusedRef.current ||
+      appStateRef.current !== "active"
+    ) {
+      return;
+    }
+
+    pendingReadingSecondsRef.current += elapsedSeconds;
+  }, []);
+
   const persistProgress = useCallback(
-    async (nextProgress: number) => {
+    (nextProgress: number) => {
       if (!bookId || !chapterId) {
-        return;
+        return Promise.resolve();
       }
       const bounded = Math.min(100, Math.max(0, Math.round(nextProgress)));
-      if (bounded === lastSavedRef.current) {
-        return;
-      }
+      const scrollPosition = Math.max(0, Math.round(scrollPositionRef.current));
+      queuedSaveCountRef.current += 1;
       setIsSaving(true);
       setError(null);
-      try {
-        await api.updateChapterProgress(bookId, chapterId, bounded, 0, 0);
-        lastSavedRef.current = bounded;
-        setSavedProgress(bounded);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "保存进度失败");
-      } finally {
-        setIsSaving(false);
-      }
+
+      const queuedSave = saveQueueRef.current
+        .catch(() => undefined)
+        .then(async () => {
+          const readingSecondsDelta = Math.floor(
+            pendingReadingSecondsRef.current
+          );
+          pendingReadingSecondsRef.current -= readingSecondsDelta;
+
+          if (
+            bounded === lastSavedRef.current &&
+            Math.abs(scrollPosition - lastSavedPositionRef.current) < 2 &&
+            readingSecondsDelta <= 0
+          ) {
+            return;
+          }
+
+          try {
+            await api.updateChapterProgress(
+              bookId,
+              chapterId,
+              bounded,
+              scrollPosition,
+              readingSecondsDelta
+            );
+            lastSavedRef.current = bounded;
+            lastSavedPositionRef.current = scrollPosition;
+            setSavedProgress(bounded);
+          } catch (err) {
+            if (readingSecondsDelta > 0) {
+              pendingReadingSecondsRef.current += readingSecondsDelta;
+            }
+            setError(err instanceof Error ? err.message : "保存进度失败");
+          }
+        });
+
+      saveQueueRef.current = queuedSave;
+      return queuedSave.finally(() => {
+        queuedSaveCountRef.current = Math.max(
+          0,
+          queuedSaveCountRef.current - 1
+        );
+        if (queuedSaveCountRef.current === 0) {
+          setIsSaving(false);
+        }
+      });
     },
     [api, bookId, chapterId]
   );
@@ -110,11 +243,108 @@ export function ReaderScreen() {
     return () => clearTimeout(timer);
   }, [persistProgress, progress, savedProgress]);
 
+  useEffect(() => {
+    progressRef.current = progress;
+  }, [progress]);
+
+  useFocusEffect(
+    useCallback(() => {
+      isReaderFocusedRef.current = true;
+      lastReadingTickRef.current = Date.now();
+      if (readingContextRef.current) {
+        setReadingContext(readingContextRef.current);
+      }
+
+      return () => {
+        recordReadingTime();
+        isReaderFocusedRef.current = false;
+        void persistProgress(progressRef.current);
+      };
+    }, [persistProgress, recordReadingTime, setReadingContext])
+  );
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (nextState) => {
+      recordReadingTime();
+      appStateRef.current = nextState;
+      lastReadingTickRef.current = Date.now();
+      if (nextState !== "active") {
+        void persistProgress(progressRef.current);
+      }
+    });
+
+    return () => subscription.remove();
+  }, [persistProgress, recordReadingTime]);
+
+  useEffect(() => {
+    if (!chapter) {
+      return;
+    }
+
+    const readingTimer = setInterval(recordReadingTime, 5_000);
+    const flushTimer = setInterval(() => {
+      recordReadingTime();
+      void persistProgress(progressRef.current);
+    }, 30_000);
+    return () => {
+      clearInterval(readingTimer);
+      clearInterval(flushTimer);
+    };
+  }, [chapter, persistProgress, recordReadingTime]);
+
+  const handleLayout = (event: LayoutChangeEvent) => {
+    viewportHeightRef.current = Math.max(0, event.nativeEvent.layout.height);
+    scrollableHeightRef.current = Math.max(
+      0,
+      contentHeightRef.current - viewportHeightRef.current
+    );
+  };
+
   const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    scrollPositionRef.current = Math.max(0, contentOffset.y);
     const readable = Math.max(1, contentSize.height - layoutMeasurement.height);
+    contentHeightRef.current = contentSize.height;
+    viewportHeightRef.current = layoutMeasurement.height;
+    scrollableHeightRef.current = Math.max(0, readable);
     const nextProgress = Math.min(100, Math.max(0, Math.round((contentOffset.y / readable) * 100)));
+    currentScrollProgressRef.current = nextProgress;
+    progressRef.current = Math.max(progressRef.current, nextProgress);
     setProgress((current) => Math.max(current, nextProgress));
+  };
+
+  const handleCreateBookmark = async () => {
+    if (!bookId || !chapterId) {
+      return;
+    }
+
+    setError(null);
+    try {
+      const currentPosition = Math.min(
+        100,
+        Math.max(0, Math.round(currentScrollProgressRef.current))
+      );
+      const bookmark = await api.createBookmark({
+        bookId,
+        chapterId,
+        note: bookmarkNote.trim() || "阅读位置 " + currentPosition + "%",
+        position: currentPosition
+      });
+      setBookmarks((current) => [bookmark, ...current]);
+      setBookmarkNote("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "添加书签失败");
+    }
+  };
+
+  const handleDeleteBookmark = async (id: string) => {
+    setError(null);
+    try {
+      await api.deleteBookmark(id);
+      setBookmarks((current) => current.filter((bookmark) => bookmark.id !== id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "删除书签失败");
+    }
   };
 
   return (
@@ -124,7 +354,10 @@ export function ReaderScreen() {
           variant="ghost"
           title="返回"
           icon={<ArrowLeft color={colors.primary} size={18} />}
-          onPress={() => router.back()}
+          onPress={() => {
+            recordReadingTime();
+            void persistProgress(progressRef.current).finally(() => router.back());
+          }}
         />
         <View style={styles.headerProgress}>
           <AppText variant="caption" tone="muted">
@@ -157,10 +390,33 @@ export function ReaderScreen() {
         </View>
       ) : chapter && book ? (
         <ScrollView
+          ref={scrollRef}
+          onLayout={handleLayout}
           onScroll={handleScroll}
           scrollEventThrottle={250}
-          onMomentumScrollEnd={() => void persistProgress(progress)}
-          onScrollEndDrag={() => void persistProgress(progress)}
+          onMomentumScrollEnd={() => {
+            recordReadingTime();
+            void persistProgress(progressRef.current);
+          }}
+          onScrollEndDrag={() => {
+            recordReadingTime();
+            void persistProgress(progressRef.current);
+          }}
+          onContentSizeChange={(_width, height) => {
+            contentHeightRef.current = Math.max(0, height);
+            scrollableHeightRef.current = Math.max(
+              0,
+              contentHeightRef.current - viewportHeightRef.current
+            );
+            const target = pendingRestoreRef.current;
+            if (target === null) {
+              return;
+            }
+            pendingRestoreRef.current = null;
+            requestAnimationFrame(() => {
+              scrollRef.current?.scrollTo({ y: target, animated: false });
+            });
+          }}
           contentContainerStyle={styles.content}
         >
           <View style={styles.chapterTitle}>
@@ -176,13 +432,18 @@ export function ReaderScreen() {
               variant="secondary"
               loading={isSaving}
               icon={<Save color={colors.foreground} size={17} />}
-              onPress={() => void persistProgress(progress)}
+              onPress={() => {
+                recordReadingTime();
+                void persistProgress(progressRef.current);
+              }}
             />
             <Button
               title="标为已读"
               icon={<CheckCircle2 color={colors.primaryForeground} size={17} />}
               onPress={() => {
+                progressRef.current = 100;
                 setProgress(100);
+                recordReadingTime();
                 void persistProgress(100);
               }}
             />
@@ -190,8 +451,73 @@ export function ReaderScreen() {
               title="问 AI"
               variant="ghost"
               icon={<Bot color={colors.primary} size={17} />}
-              onPress={() => router.push("/assistant")}
+              onPress={() => {
+                recordReadingTime();
+                void persistProgress(progressRef.current).finally(() =>
+                  router.push("/assistant")
+                );
+              }}
             />
+          </Card>
+
+          <Card style={styles.bookmarkCard}>
+            <View style={styles.bookmarkHeader}>
+              <View style={styles.bookmarkTitle}>
+                <BookmarkPlus color={colors.primary} size={18} />
+                <AppText variant="subtitle">章节书签</AppText>
+              </View>
+              <AppText variant="caption" tone="muted">
+                {bookmarks.length} 条
+              </AppText>
+            </View>
+            <Field
+              value={bookmarkNote}
+              onChangeText={setBookmarkNote}
+              placeholder="添加书签备注（可选）"
+              returnKeyType="done"
+              onSubmitEditing={() => void handleCreateBookmark()}
+            />
+            <Button
+              title="保存当前位置"
+              variant="secondary"
+              icon={<BookmarkPlus color={colors.foreground} size={16} />}
+              onPress={() => void handleCreateBookmark()}
+            />
+            {bookmarks.map((bookmark) => (
+              <View
+                key={bookmark.id}
+                style={[styles.bookmarkRow, { borderTopColor: colors.border }]}
+              >
+                <View style={styles.bookmarkText}>
+                  <AppText variant="label">{bookmark.note}</AppText>
+                  <AppText variant="caption" tone="muted">
+                    位置 {Math.round(bookmark.position)}%
+                  </AppText>
+                </View>
+                <View style={styles.bookmarkActions}>
+                  <Button
+                    title="跳转"
+                    variant="ghost"
+                    onPress={() => {
+                      const percentage = Math.min(
+                        100,
+                        Math.max(0, bookmark.position)
+                      );
+                      scrollRef.current?.scrollTo({
+                        y: (percentage / 100) * scrollableHeightRef.current,
+                        animated: true
+                      });
+                    }}
+                  />
+                  <Button
+                    title=""
+                    variant="ghost"
+                    icon={<Trash2 color={colors.danger} size={16} />}
+                    onPress={() => void handleDeleteBookmark(bookmark.id)}
+                  />
+                </View>
+              </View>
+            ))}
           </Card>
 
           {error ? (
@@ -206,6 +532,7 @@ export function ReaderScreen() {
                 key={`${block.type}-${index}`}
                 block={block}
                 apiBaseUrl={settings.apiBaseUrl}
+                apiAccessToken={settings.apiAccessToken}
                 bookId={book.id}
                 chapterFileName={chapter.fileName}
               />
@@ -220,11 +547,13 @@ export function ReaderScreen() {
 function MarkdownBlockView({
   block,
   apiBaseUrl,
+  apiAccessToken,
   bookId,
   chapterFileName
 }: {
   block: MarkdownBlock;
   apiBaseUrl: string;
+  apiAccessToken?: string;
   bookId: string;
   chapterFileName: string;
 }) {
@@ -277,9 +606,18 @@ function MarkdownBlockView({
 
   if (block.type === "image") {
     const src = resolveMarkdownImageSrc(block.src, apiBaseUrl, bookId, chapterFileName);
+    const bearerToken = apiAccessToken?.trim();
+    const isApiAsset = src.startsWith(
+      `${apiBaseUrl.replace(/\/$/, "")}/assets/`
+    );
     return src ? (
       <Image
-        source={{ uri: src }}
+        source={{
+          uri: src,
+          ...(bearerToken && isApiAsset
+            ? { headers: { Authorization: `Bearer ${bearerToken}` } }
+            : {})
+        }}
         accessibilityLabel={block.alt || "Markdown image"}
         resizeMode="contain"
         style={[styles.image, { backgroundColor: colors.surfaceMuted }]}
@@ -338,6 +676,36 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 10
+  },
+  bookmarkCard: {
+    gap: 12
+  },
+  bookmarkHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12
+  },
+  bookmarkTitle: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8
+  },
+  bookmarkRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingTop: 10
+  },
+  bookmarkText: {
+    flex: 1,
+    minWidth: 0
+  },
+  bookmarkActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4
   },
   markdown: {
     gap: 12

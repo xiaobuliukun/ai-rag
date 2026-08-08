@@ -9,10 +9,12 @@ import { AiModule } from './ai/ai.module';
 import { BookmarksModule } from './bookmarks/bookmarks.module';
 import { BackupModule } from './backup/backup.module';
 import { AssetsModule } from './assets/assets.module';
+import { ContentModule } from './content/content.module';
 
 @Module({
   imports: [
     PrismaModule,
+    ContentModule,
     BooksModule,
     ScanModule,
     SearchModule,

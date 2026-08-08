@@ -1,12 +1,12 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import type { CSSProperties } from "react";
 import { BookOpen, Clock } from "lucide-react";
 import { Book } from "@/types";
 import { getBookAssetUrl } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { ApiImage } from "@/components/api-image";
 
 interface BookCardProps {
   book: Book;
@@ -38,7 +38,7 @@ export function BookCard({ book }: BookCardProps) {
       >
         <div className="book-tile-cover relative shrink-0 overflow-hidden">
           {coverImage && (
-            <Image
+            <ApiImage
               src={coverImage}
               alt={book.title}
               fill

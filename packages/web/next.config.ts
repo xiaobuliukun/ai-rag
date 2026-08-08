@@ -1,4 +1,11 @@
 import type { NextConfig } from "next";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const projectRoot = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../..",
+);
 
 function extraImagePatterns() {
   return (process.env.NEXT_PUBLIC_IMAGE_HOSTS ?? "")
@@ -12,6 +19,8 @@ function extraImagePatterns() {
 }
 
 const nextConfig: NextConfig = {
+  output: "standalone",
+  outputFileTracingRoot: projectRoot,
   transpilePackages: ["@moxu/shared"],
   images: {
     remotePatterns: [

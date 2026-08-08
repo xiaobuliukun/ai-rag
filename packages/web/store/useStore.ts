@@ -2,6 +2,12 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { AiContext, AiRuntimeConfig } from '@/types'
 import type { Locale } from '@/lib/i18n'
+import {
+  CLIENT_PREFERENCES_STORAGE_VERSION,
+  createPersistedPreferenceState,
+  mergePersistedPreferenceState,
+  sanitizePersistedPreferenceState,
+} from '@/lib/client-preferences'
 
 const DEFAULT_AI_PANEL_WIDTH = 384
 const MIN_AI_PANEL_WIDTH = 320
@@ -141,21 +147,12 @@ export const useStore = create<AppState>()(
     }),
     {
       name: "moxu-preferences",
-      partialize: (state) => ({
-        isSidebarOpen: state.isSidebarOpen,
-        aiPanelWidth: state.aiPanelWidth,
-        fontSize: state.fontSize,
-        lineHeight: state.lineHeight,
-        colorTemperature: state.colorTemperature,
-        pageBrightness: state.pageBrightness,
-        autoBrightness: state.autoBrightness,
-        paperTexture: state.paperTexture,
-        readingReminderMinutes: state.readingReminderMinutes,
-        autoSaveIntervalSeconds: state.autoSaveIntervalSeconds,
-        smoothScrollRestore: state.smoothScrollRestore,
-        locale: state.locale,
-        aiConfig: state.aiConfig,
-      }),
+      version: CLIENT_PREFERENCES_STORAGE_VERSION,
+      partialize: (state) => createPersistedPreferenceState(state),
+      migrate: (persistedState) =>
+        sanitizePersistedPreferenceState(persistedState),
+      merge: (persistedState, currentState) =>
+        mergePersistedPreferenceState(currentState, persistedState),
     },
   ),
 )

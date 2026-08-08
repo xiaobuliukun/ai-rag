@@ -123,10 +123,7 @@ describe('SearchService', () => {
       'React',
       expect.objectContaining({ limit: 80 }),
     );
-    expect(contentIndex.semanticSearch).toHaveBeenCalledWith(
-      'React',
-      expect.objectContaining({ limit: 24 }),
-    );
+    expect(contentIndex.semanticSearch).not.toHaveBeenCalled();
     expect(results).toHaveLength(1);
     expect(results[0]).toMatchObject({
       type: 'content',
@@ -158,5 +155,29 @@ describe('SearchService', () => {
       chapterId: 'chapter-3',
     });
     expect(results[0].highlightedContent).toContain('<mark>列表性能</mark>');
+  });
+
+  it('returns lexical results without waiting for an unresolved semantic request', async () => {
+    contentIndex.search.mockResolvedValue([
+      {
+        chunkId: 'chunk-1',
+        bookId: 'book-1',
+        chapterId: 'chapter-1',
+        bookTitle: 'React Patterns',
+        chapterTitle: 'Hooks',
+        content: 'React hooks share stateful logic.',
+        excerpt: 'React hooks share stateful logic.',
+        highlightedExcerpt: '<mark>React</mark> hooks share stateful logic.',
+        score: 8,
+      },
+    ]);
+    contentIndex.semanticSearch.mockImplementation(
+      () => new Promise<never>(() => undefined),
+    );
+
+    await expect(
+      service.search('React', undefined, 'content'),
+    ).resolves.toHaveLength(1);
+    expect(contentIndex.semanticSearch).not.toHaveBeenCalled();
   });
 });

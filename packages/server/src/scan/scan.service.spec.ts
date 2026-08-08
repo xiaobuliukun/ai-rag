@@ -15,7 +15,9 @@ describe('ScanService', () => {
       upsert: jest.fn(),
     },
     chapter: {
-      upsert: jest.fn(),
+      findUnique: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
       deleteMany: jest.fn(),
     },
     chapterChunk: {
@@ -29,6 +31,8 @@ describe('ScanService', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    prisma.chapter.findUnique.mockResolvedValue(null);
+    prisma.chapter.deleteMany.mockResolvedValue({ count: 0 });
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'moxu-scan-'));
 
     const module: TestingModule = await Test.createTestingModule({
@@ -66,25 +70,14 @@ describe('ScanService', () => {
     await fs.outputFile(path.join(bookPath, 'part-2', 'notes.txt'), 'skip me');
 
     prisma.book.upsert.mockResolvedValue({ id: 'book-1' });
-    prisma.chapter.upsert
+    prisma.chapter.create
       .mockResolvedValueOnce({ id: 'chapter-1' })
       .mockResolvedValueOnce({ id: 'chapter-2' });
 
     await service.scanDirectory(tempDir);
 
-    expect(prisma.chapter.upsert).toHaveBeenNthCalledWith(1, {
-      where: {
-        bookId_fileName: {
-          bookId: 'book-1',
-          fileName: '01-intro.md',
-        },
-      },
-      update: {
-        orderIndex: 0,
-        title: 'intro',
-        content: '# Intro',
-      },
-      create: {
+    expect(prisma.chapter.create).toHaveBeenNthCalledWith(1, {
+      data: {
         bookId: 'book-1',
         fileName: '01-intro.md',
         orderIndex: 0,
@@ -92,19 +85,8 @@ describe('ScanService', () => {
         content: '# Intro',
       },
     });
-    expect(prisma.chapter.upsert).toHaveBeenNthCalledWith(2, {
-      where: {
-        bookId_fileName: {
-          bookId: 'book-1',
-          fileName: 'part-2/02-hooks.md',
-        },
-      },
-      update: {
-        orderIndex: 1,
-        title: 'hooks',
-        content: '# Hooks',
-      },
-      create: {
+    expect(prisma.chapter.create).toHaveBeenNthCalledWith(2, {
+      data: {
         bookId: 'book-1',
         fileName: 'part-2/02-hooks.md',
         orderIndex: 1,
@@ -130,7 +112,7 @@ describe('ScanService', () => {
     const progressEvents: Array<{ phase?: string; currentBook?: string }> = [];
 
     prisma.book.upsert.mockResolvedValue({ id: 'book-1' });
-    prisma.chapter.upsert.mockResolvedValue({ id: 'chapter-1' });
+    prisma.chapter.create.mockResolvedValue({ id: 'chapter-1' });
 
     await service.scanDirectory(tempDir, (progress) => {
       progressEvents.push({
@@ -150,11 +132,92 @@ describe('ScanService', () => {
     );
   });
 
+  it('passes the scan cancellation signal into remote indexing work', async () => {
+    const bookPath = path.join(tempDir, 'Book A');
+    await fs.outputFile(path.join(bookPath, '01-intro.md'), '# Intro');
+    const controller = new AbortController();
+
+    prisma.book.upsert.mockResolvedValue({ id: 'book-1' });
+    prisma.chapter.create.mockResolvedValue({ id: 'chapter-1' });
+
+    await service.scanDirectory(tempDir, { signal: controller.signal });
+
+    expect(contentIndex.syncBook).toHaveBeenCalledWith('book-1', {
+      signal: controller.signal,
+    });
+  });
+
+  it('preserves custom book titles and leaves unchanged chapters untouched', async () => {
+    const bookPath = path.join(tempDir, 'Directory Title');
+    await fs.outputFile(path.join(bookPath, '01-intro.md'), '# Intro');
+    const previousUpdatedAt = new Date('2026-06-01T00:00:00.000Z');
+
+    prisma.book.upsert.mockResolvedValue({
+      id: 'book-1',
+      title: 'My Custom Title',
+    });
+    prisma.chapter.findUnique.mockResolvedValue({
+      id: 'chapter-1',
+      title: 'intro',
+      orderIndex: 0,
+      content: '# Intro',
+      updatedAt: previousUpdatedAt,
+    });
+
+    await service.scanDirectory(tempDir);
+
+    expect(prisma.book.upsert).toHaveBeenCalledWith({
+      where: { path: bookPath },
+      update: {},
+      create: {
+        title: 'Directory Title',
+        path: bookPath,
+      },
+    });
+    expect(prisma.chapter.update).not.toHaveBeenCalled();
+    expect(prisma.chapterChunk.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.chapterChunk.createMany).not.toHaveBeenCalled();
+    expect(contentIndex.syncBook).not.toHaveBeenCalled();
+  });
+
+  it('refreshes the index for chapter metadata changes without rebuilding chunks', async () => {
+    const bookPath = path.join(tempDir, 'Book A');
+    await fs.outputFile(
+      path.join(bookPath, '01-intro.md'),
+      '---\ntitle: Updated Intro\n---\n# Intro',
+    );
+
+    prisma.book.upsert.mockResolvedValue({ id: 'book-1' });
+    prisma.chapter.findUnique.mockResolvedValue({
+      id: 'chapter-1',
+      title: 'Old Intro',
+      orderIndex: 0,
+      content: '# Intro',
+      updatedAt: new Date('2026-07-01T00:00:00.000Z'),
+    });
+    prisma.chapter.update.mockResolvedValue({ id: 'chapter-1' });
+
+    await service.scanDirectory(tempDir);
+
+    expect(prisma.chapter.update).toHaveBeenCalledWith({
+      where: { id: 'chapter-1' },
+      data: {
+        title: 'Updated Intro',
+        orderIndex: 0,
+        content: '# Intro',
+        updatedAt: new Date('2026-07-01T00:00:00.000Z'),
+      },
+    });
+    expect(prisma.chapterChunk.deleteMany).not.toHaveBeenCalled();
+    expect(contentIndex.syncBook).toHaveBeenCalledWith('book-1');
+  });
+
   it('removes all chapters when a scanned book has no markdown files', async () => {
     const bookPath = path.join(tempDir, 'Empty Book');
     await fs.outputFile(path.join(bookPath, 'notes.txt'), 'skip me');
 
     prisma.book.upsert.mockResolvedValue({ id: 'book-1' });
+    prisma.chapter.deleteMany.mockResolvedValueOnce({ count: 1 });
 
     const result = await service.scanDirectory(tempDir);
 
@@ -164,7 +227,7 @@ describe('ScanService', () => {
         bookId: 'book-1',
       },
     });
-    expect(prisma.chapter.upsert).not.toHaveBeenCalled();
+    expect(prisma.chapter.create).not.toHaveBeenCalled();
     expect(contentIndex.syncBook).toHaveBeenCalledWith('book-1');
   });
 
@@ -189,7 +252,7 @@ describe('ScanService', () => {
       { path: missingPath, title: 'Missing Book' },
     ]);
     prisma.book.upsert.mockResolvedValue({ id: 'book-1' });
-    prisma.chapter.upsert.mockResolvedValue({ id: 'chapter-1' });
+    prisma.chapter.create.mockResolvedValue({ id: 'chapter-1' });
 
     const result = await service.rescanKnownBooks();
 
@@ -201,12 +264,60 @@ describe('ScanService', () => {
     });
     expect(prisma.book.upsert).toHaveBeenCalledWith({
       where: { path: bookPath },
-      update: { title: 'Custom Known Title' },
+      update: {},
       create: {
         title: 'Custom Known Title',
         path: bookPath,
       },
     });
     expect(contentIndex.syncBook).toHaveBeenCalledWith('book-1');
+  });
+
+  it('serializes concurrent scans before they mutate books or indexes', async () => {
+    const firstLibrary = path.join(tempDir, 'library-one');
+    const secondLibrary = path.join(tempDir, 'library-two');
+    await fs.outputFile(
+      path.join(firstLibrary, 'Book A', '01-intro.md'),
+      '# Intro',
+    );
+    await fs.outputFile(
+      path.join(secondLibrary, 'Book B', '01-start.md'),
+      '# Start',
+    );
+
+    prisma.book.upsert
+      .mockResolvedValueOnce({ id: 'book-1' })
+      .mockResolvedValueOnce({ id: 'book-2' });
+    prisma.chapter.create
+      .mockResolvedValueOnce({ id: 'chapter-1' })
+      .mockResolvedValueOnce({ id: 'chapter-2' });
+
+    let releaseFirstIndex: (() => void) | undefined;
+    let markFirstIndexStarted: (() => void) | undefined;
+    const firstIndexStarted = new Promise<void>((resolve) => {
+      markFirstIndexStarted = resolve;
+    });
+    contentIndex.syncBook
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseFirstIndex = resolve;
+            markFirstIndexStarted?.();
+          }),
+      )
+      .mockResolvedValueOnce(undefined);
+
+    const firstScan = service.scanDirectory(firstLibrary);
+    await firstIndexStarted;
+    const secondScan = service.scanDirectory(secondLibrary);
+
+    expect(prisma.book.upsert).toHaveBeenCalledTimes(1);
+    expect(contentIndex.syncBook).toHaveBeenCalledTimes(1);
+
+    releaseFirstIndex?.();
+    await Promise.all([firstScan, secondScan]);
+
+    expect(prisma.book.upsert).toHaveBeenCalledTimes(2);
+    expect(contentIndex.syncBook).toHaveBeenCalledTimes(2);
   });
 });

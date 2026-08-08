@@ -84,6 +84,7 @@ export const dictionaries = {
       previous: "上一章",
       next: "下一章",
       addBookmark: "添加书签",
+      jumpBookmark: "跳转",
       deleteBookmark: "删除书签",
       bookmarkPlaceholder: "写一句书签备注...",
       bookmarkPlaceholderWithSelection: "写一句备注，选中文本会作为摘录保存...",
@@ -313,6 +314,7 @@ export const dictionaries = {
       previous: "Previous Chapter",
       next: "Next Chapter",
       addBookmark: "Add bookmark",
+      jumpBookmark: "Jump",
       deleteBookmark: "Delete bookmark",
       bookmarkPlaceholder: "Write a bookmark note...",
       bookmarkPlaceholderWithSelection:

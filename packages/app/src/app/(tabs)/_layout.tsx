@@ -1,4 +1,4 @@
-import { Tabs } from "expo-router";
+import { Tabs } from "expo-router/js-tabs";
 import { Bot, LibraryBig, Search, Settings } from "lucide-react-native";
 import { useAppTheme } from "@/application/providers/root-providers";
 

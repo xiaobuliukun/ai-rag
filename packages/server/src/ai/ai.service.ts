@@ -19,6 +19,12 @@ import {
   SemanticSearchResult,
 } from '../content/content-index.service';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  buildRemoteRequestUrl,
+  createRemoteRequestSignal,
+  DEFAULT_AI_REQUEST_TIMEOUT_MS,
+  normalizeRemoteBaseUrl,
+} from './remote-request';
 import { decryptSecret, encryptSecret } from './secrets';
 
 const DEFAULT_RAG_SOURCE_COUNT = 5;
@@ -151,12 +157,22 @@ export class AiService {
 
     const ragConfig = this.normalizeRagConfig(config);
     const embeddingConfig = normalizeEmbeddingConfig(config);
+    let baseUrl = config.baseUrl?.trim() || null;
+    if (baseUrl) {
+      try {
+        baseUrl = normalizeRemoteBaseUrl(baseUrl);
+      } catch (error) {
+        throw new BadRequestException(
+          error instanceof Error ? error.message : 'Invalid Base URL',
+        );
+      }
+    }
 
     const saved = await this.prisma.aiConfig.upsert({
       where: { id: DEFAULT_AI_CONFIG_ID },
       update: {
         mode: config.mode,
-        baseUrl: config.baseUrl?.trim() || null,
+        baseUrl,
         model: config.model?.trim() || null,
         apiKey: encryptSecret(config.apiKey),
         embeddingProvider: embeddingConfig.embeddingProvider,
@@ -168,7 +184,7 @@ export class AiService {
       create: {
         id: DEFAULT_AI_CONFIG_ID,
         mode: config.mode,
-        baseUrl: config.baseUrl?.trim() || null,
+        baseUrl,
         model: config.model?.trim() || null,
         apiKey: encryptSecret(config.apiKey),
         embeddingProvider: embeddingConfig.embeddingProvider,
@@ -377,7 +393,7 @@ export class AiService {
     const terms = this.buildTerms(queryText, true);
     const searchQuery = this.buildSearchQuery(queryText);
 
-    const [currentChunks, indexedMatches, semanticMatches] = await Promise.all([
+    const [currentChunks, indexedMatches] = await Promise.all([
       context?.chapterId
         ? this.prisma.chapterChunk.findMany({
             where: {
@@ -390,11 +406,6 @@ export class AiService {
         : Promise.resolve([]),
       this.retrieveIndexedMatches(
         searchQuery,
-        context?.bookId,
-        config.ragSourceCount,
-      ),
-      this.retrieveSemanticMatches(
-        queryText,
         context?.bookId,
         config.ragSourceCount,
       ),
@@ -443,6 +454,31 @@ export class AiService {
       };
     });
 
+    const lexicalRankedChunks = this.dedupeRankedChunks([
+      ...currentRankedChunks,
+      ...indexedRankedChunks,
+    ]);
+    const hasUsefulLexicalSource = lexicalRankedChunks.some(
+      (chunk) => chunk.text.trim().length > 0 && chunk.score > 0,
+    );
+    const fallbackChunks = hasUsefulLexicalSource
+      ? []
+      : await this.retrieveFallbackChunks(request);
+    const localRankedChunks = this.dedupeRankedChunks([
+      ...lexicalRankedChunks,
+      ...fallbackChunks,
+    ]);
+    const hasUsefulLocalSource = localRankedChunks.some(
+      (chunk) => chunk.text.trim().length > 0 && chunk.score > 0,
+    );
+    const semanticMatches = hasUsefulLocalSource
+      ? []
+      : await this.retrieveSemanticMatches(
+          queryText,
+          context?.bookId,
+          config.ragSourceCount,
+        ).catch(() => [] as SemanticSearchResult[]);
+
     const semanticRankedChunks = semanticMatches.map((match, index) => {
       const chapter = {
         id: match.chapterId,
@@ -466,17 +502,11 @@ export class AiService {
     });
 
     const indexedChunks = this.dedupeRankedChunks([
-      ...currentRankedChunks,
-      ...indexedRankedChunks,
+      ...localRankedChunks,
       ...semanticRankedChunks,
     ]);
 
-    const fallbackChunks =
-      indexedChunks.length > 0
-        ? []
-        : await this.retrieveFallbackChunks(request);
-
-    const ranked = this.pickTopChunks([...indexedChunks, ...fallbackChunks])
+    const ranked = this.pickTopChunks(indexedChunks)
       .filter((chunk) => chunk.text.trim().length > 0 && chunk.score > 0)
       .slice(0, config.ragSourceCount);
 
@@ -849,6 +879,14 @@ export class AiService {
       return null;
     }
 
+    const encryptedApiKey = encryptSecret(saved.apiKey);
+    if (encryptedApiKey !== saved.apiKey) {
+      await aiConfig.update({
+        where: { id: DEFAULT_AI_CONFIG_ID },
+        data: { apiKey: encryptedApiKey },
+      });
+    }
+
     const ragConfig = this.normalizeRagConfig(saved);
     const embeddingConfig = normalizeEmbeddingConfig(saved);
 
@@ -856,7 +894,7 @@ export class AiService {
       mode: saved.mode === 'openai-compatible' ? 'openai-compatible' : 'local',
       baseUrl: saved.baseUrl ?? undefined,
       model: saved.model ?? undefined,
-      apiKey: decryptSecret(saved.apiKey),
+      apiKey: decryptSecret(encryptedApiKey),
       embeddingProvider: embeddingConfig.embeddingProvider,
       embeddingModel: embeddingConfig.embeddingModel,
       ragSourceCount: ragConfig.ragSourceCount,
@@ -874,7 +912,7 @@ export class AiService {
     history: AiChatHistoryMessage[],
   ) {
     const response = await fetch(
-      `${config.baseUrl.replace(/\/$/, '')}/chat/completions`,
+      buildRemoteRequestUrl(config.baseUrl, 'chat/completions'),
       {
         method: 'POST',
         headers: {
@@ -894,6 +932,10 @@ export class AiService {
             history,
           ),
         }),
+        signal: createRemoteRequestSignal(
+          process.env.AI_REQUEST_TIMEOUT_MS,
+          DEFAULT_AI_REQUEST_TIMEOUT_MS,
+        ),
       },
     );
 
@@ -924,7 +966,7 @@ export class AiService {
     history: AiChatHistoryMessage[],
   ) {
     const response = await fetch(
-      `${config.baseUrl.replace(/\/$/, '')}/chat/completions`,
+      buildRemoteRequestUrl(config.baseUrl, 'chat/completions'),
       {
         method: 'POST',
         headers: {
@@ -945,6 +987,10 @@ export class AiService {
             history,
           ),
         }),
+        signal: createRemoteRequestSignal(
+          process.env.AI_REQUEST_TIMEOUT_MS,
+          DEFAULT_AI_REQUEST_TIMEOUT_MS,
+        ),
       },
     );
 

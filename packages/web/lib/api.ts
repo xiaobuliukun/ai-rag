@@ -22,8 +22,48 @@ import {
   UpdateBookmarkRequest,
 } from "@/types";
 
-export const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001/api";
+type MoxuDesktopBridge = {
+  apiBaseUrl?: string;
+  apiAccessToken?: string;
+};
+
+function getDesktopApiBaseUrl() {
+  if (typeof window === "undefined") {
+    return undefined;
+  }
+
+  return (window as Window & { moxuDesktop?: MoxuDesktopBridge }).moxuDesktop
+    ?.apiBaseUrl;
+}
+
+export function getApiBaseUrl() {
+  const desktopApiBaseUrl = getDesktopApiBaseUrl();
+  if (desktopApiBaseUrl) {
+    return desktopApiBaseUrl;
+  }
+
+  if (typeof window === "undefined" && process.env.MOXU_API_PORT) {
+    const host = process.env.MOXU_API_HOST ?? "127.0.0.1";
+    return `http://${host}:${process.env.MOXU_API_PORT}/api`;
+  }
+
+  return process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001/api";
+}
+
+export function getApiAccessToken() {
+  if (typeof window !== "undefined") {
+    const desktopToken = (
+      window as Window & { moxuDesktop?: MoxuDesktopBridge }
+    ).moxuDesktop?.apiAccessToken;
+    if (desktopToken?.trim()) {
+      return desktopToken.trim();
+    }
+  }
+
+  return process.env.NEXT_PUBLIC_API_ACCESS_TOKEN?.trim() ?? "";
+}
+
+export const API_BASE_URL = getApiBaseUrl();
 
 type ApiInit = RequestInit & {
   cache?: RequestCache;
@@ -56,12 +96,10 @@ async function readErrorMessage(response: Response) {
 }
 
 export async function fetchJson<T>(path: string, init?: ApiInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const headers = createApiHeaders(init?.headers);
+  const response = await fetch(`${getApiBaseUrl()}${path}`, {
     ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...init?.headers,
-    },
+    headers,
   });
 
   if (!response.ok) {
@@ -269,18 +307,16 @@ export function importBackup(
 
 export function getBookAssetUrl(bookId: string, filePath: string) {
   const params = new URLSearchParams({ path: filePath });
-  return `${API_BASE_URL}/assets/books/${bookId}/files?${params.toString()}`;
+  return `${getApiBaseUrl()}/assets/books/${bookId}/files?${params.toString()}`;
 }
 
 export async function streamChatWithAI(
   request: AiChatRequest,
   onEvent: (event: AiChatStreamEvent) => void,
 ) {
-  const response = await fetch(`${API_BASE_URL}/ai/chat/stream`, {
+  const response = await fetch(`${getApiBaseUrl()}/ai/chat/stream`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers: createApiHeaders(),
     body: JSON.stringify(request),
   });
 
@@ -323,6 +359,20 @@ export async function streamChatWithAI(
   } finally {
     reader.releaseLock();
   }
+}
+
+export function createApiHeaders(init?: HeadersInit) {
+  const headers = new Headers(init);
+  if (!headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+
+  const accessToken = getApiAccessToken();
+  if (accessToken && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${accessToken}`);
+  }
+
+  return headers;
 }
 
 function parseSseEvent(event: string) {

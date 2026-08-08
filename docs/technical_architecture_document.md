@@ -177,10 +177,13 @@ POST /api/ai/chat
   "mode": "local-extractive|openai-compatible",
   "sources": [
     {
+      "id": "string",
+      "bookId": "string",
       "chapterId": "string",
+      "bookTitle": "string",
       "chapterTitle": "string",
       "excerpt": "string",
-      "relevance": "number"
+      "relevance": 100
     }
   ]
 }
@@ -206,19 +209,19 @@ GET /api/search?q=string&bookId=string
 响应：
 
 ```json
-{
-  "results": [
-    {
-      "id": "string",
-      "type": "chapter|content",
-      "title": "string",
-      "content": "string",
-      "score": "number",
-      "bookId": "string",
-      "chapterId": "string"
-    }
-  ]
-}
+[
+  {
+    "id": "string",
+    "type": "book|chapter|content",
+    "title": "string",
+    "content": "string",
+    "highlightedContent": "string",
+    "score": 100,
+    "bookId": "string",
+    "chapterId": "string",
+    "bookTitle": "string"
+  }
+]
 ```
 
 ## 5. 服务器架构
@@ -233,13 +236,15 @@ graph TD
     
     subgraph "NestJS API服务器"
         B
-        C[BookService]
-        C --> G[ChapterService]
+        C[BooksService]
+        C --> G[ScanService]
         C --> H[SearchService]
-        C --> I[AIChatService]
+        C --> I[AiService]
+        C --> N[BookmarksService]
+        C --> O[BackupService]
         D[PrismaClient]
-        E[FileSystemService]
-        F[AiService]
+        E[fs-extra / AssetsController]
+        F[ContentIndexService]
     end
     
     D --> J[(SQLite)]
@@ -256,19 +261,21 @@ graph TD
 erDiagram
     BOOK ||--o{ CHAPTER : contains
     BOOK ||--o{ BOOKMARK : has
+    CHAPTER ||--o{ CHAPTER_CHUNK : splits
     CHAPTER ||--o{ READING_PROGRESS : tracks
     CHAPTER ||--o{ VECTOR_DATA : embeds
+    CHAPTER_CHUNK ||--o| VECTOR_DATA : vectorizes
     
     BOOK {
         string id PK
         string title
         string path UK
+        string description
+        string tags
         string coverImage
         datetime lastRead
         datetime createdAt
         datetime updatedAt
-        int totalChapters
-        int readChapters
     }
     
     CHAPTER {
@@ -279,7 +286,17 @@ erDiagram
         string content
         int orderIndex
         boolean isRead
-        datetime lastRead
+        float progress
+        datetime createdAt
+        datetime updatedAt
+    }
+
+    CHAPTER_CHUNK {
+        string id PK
+        string chapterId FK
+        int chunkIndex
+        text content
+        int charCount
         datetime createdAt
         datetime updatedAt
     }
@@ -289,6 +306,7 @@ erDiagram
         string chapterId FK
         float scrollPosition
         float percentage
+        int readingSeconds
         datetime updatedAt
     }
     
@@ -297,106 +315,46 @@ erDiagram
         string bookId FK
         string chapterId FK
         string note
+        string excerpt
         int position
         datetime createdAt
+        datetime updatedAt
     }
     
     VECTOR_DATA {
         string id PK
+        string chunkId FK,UK
         string chapterId FK
         text content
-        vector embeddings
+        text embedding
         json metadata
         datetime createdAt
+        datetime updatedAt
     }
     
     AI_CONFIG {
         string id PK
-        string provider
+        string mode
+        string baseUrl
         string apiKey
         string model
-        json settings
-        boolean isActive
+        string embeddingProvider
+        string embeddingModel
+        int ragSourceCount
+        int ragContextChars
+        int ragExcerptChars
+        datetime createdAt
         datetime updatedAt
     }
 ```
 
-### 6.2 数据定义语言
+### 6.2 数据定义来源
 
-**书籍表 (books)**
-
-```sql
--- 创建表
-CREATE TABLE books (
-    id TEXT PRIMARY KEY,
-    title TEXT NOT NULL,
-    path TEXT UNIQUE NOT NULL,
-    coverImage TEXT,
-    lastRead DATETIME,
-    createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
-    totalChapters INTEGER DEFAULT 0,
-    readChapters INTEGER DEFAULT 0
-);
-
--- 创建索引
-CREATE INDEX idx_books_lastRead ON books(lastRead DESC);
-CREATE INDEX idx_books_path ON books(path);
-```
-
-**章节表 (chapters)**
-
-```sql
--- 创建表
-CREATE TABLE chapters (
-    id TEXT PRIMARY KEY,
-    bookId TEXT NOT NULL,
-    title TEXT NOT NULL,
-    fileName TEXT NOT NULL,
-    content TEXT,
-    orderIndex INTEGER,
-    isRead BOOLEAN DEFAULT FALSE,
-    lastRead DATETIME,
-    createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (bookId) REFERENCES books(id) ON DELETE CASCADE
-);
-
--- 创建索引
-CREATE INDEX idx_chapters_bookId ON chapters(bookId);
-CREATE INDEX idx_chapters_order ON chapters(bookId, orderIndex);
-```
-
-**阅读进度表 (readingProgress)**
-
-```sql
--- 创建表
-CREATE TABLE readingProgress (
-    id TEXT PRIMARY KEY,
-    chapterId TEXT UNIQUE NOT NULL,
-    scrollPosition REAL DEFAULT 0,
-    percentage REAL DEFAULT 0,
-    updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (chapterId) REFERENCES chapters(id) ON DELETE CASCADE
-);
-```
-
-**向量数据表 (VectorData)**
-
-```sql
--- 当前实现：SQLite 中保存序列化后的本地 embedding
-CREATE TABLE vectorData (
-    id TEXT PRIMARY KEY,
-    chapterId TEXT NOT NULL,
-    content TEXT NOT NULL,
-    metadata TEXT,
-    createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (chapterId) REFERENCES chapters(id) ON DELETE CASCADE
-);
-
--- 创建索引
-CREATE INDEX idx_vectorData_chapterId ON vectorData(chapterId);
-```
+数据库结构以 `packages/server/prisma/schema.prisma` 和
+`packages/server/prisma/migrations/` 为唯一事实来源。章节正文同时保存在
+`Chapter.content` 与 `ChapterChunk.content` 中：前者用于阅读和备份，后者用于
+FTS/RAG。`ChapterChunkFts` 是迁移创建的 SQLite FTS5 虚表，不属于 Prisma
+关系模型，因此由 `ContentIndexService` 显式重建和清理。
 
 ## 7. RAG实现方案
 
@@ -416,10 +374,10 @@ CREATE INDEX idx_vectorData_chapterId ON vectorData(chapterId);
 
 ### 7.3 图片处理策略
 
-* **本地图片服务**：使用Next.js的Image组件优化本地图片加载
+* **本地图片服务**：由 NestJS 资源接口代理书籍目录内的图片文件
 
 * **路径映射**：将Markdown中的相对路径映射到可访问的URL
 
-* **缓存策略**：实现图片缓存，提高加载性能
+* **缓存策略**：资源接口返回私有 HTTP 缓存头；本地 Markdown 图片在 Web 阅读器中不经过 Next 图片转换
 
 * **格式支持**：支持常见的图片格式（PNG, JPG, GIF, SVG）

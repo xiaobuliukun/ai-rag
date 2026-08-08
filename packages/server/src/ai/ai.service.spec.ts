@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import type { AiChatStreamEvent } from '@moxu/shared';
 import { AiService } from './ai.service';
 import { encryptSecret } from './secrets';
 
@@ -27,6 +28,11 @@ type AiConfigUpsertPayload = {
   };
 };
 
+type AiConfigUpdatePayload = {
+  where: { id: string };
+  data: { apiKey: string | null };
+};
+
 describe('AiService', () => {
   const prisma = {
     chapter: {
@@ -36,9 +42,9 @@ describe('AiService', () => {
       findMany: jest.fn(),
     },
     aiConfig: {
-      findUnique: jest.fn<() => Promise<AiConfigRecord | null>>(),
-      upsert:
-        jest.fn<(payload: AiConfigUpsertPayload) => Promise<AiConfigRecord>>(),
+      findUnique: jest.fn<Promise<AiConfigRecord | null>, []>(),
+      upsert: jest.fn<Promise<AiConfigRecord>, [AiConfigUpsertPayload]>(),
+      update: jest.fn<Promise<AiConfigRecord>, [AiConfigUpdatePayload]>(),
     },
   };
   const contentIndex = {
@@ -148,6 +154,9 @@ describe('AiService', () => {
         score: 30,
       },
     ]);
+    contentIndex.semanticSearch.mockImplementation(
+      () => new Promise<never>(() => undefined),
+    );
 
     const response = await service.chat({
       message: 'React hooks',
@@ -172,6 +181,7 @@ describe('AiService', () => {
       }),
     );
     expect(prisma.chapterChunk.findMany).not.toHaveBeenCalled();
+    expect(contentIndex.semanticSearch).not.toHaveBeenCalled();
     expect(response.sources[0]).toMatchObject({
       id: 'chunk-1',
       bookId: 'book-1',
@@ -292,6 +302,9 @@ describe('AiService', () => {
     const body = JSON.parse(
       (fetchMock.mock.calls[0][1] as RequestInit).body as string,
     ) as { messages: Array<{ role: string; content: string }> };
+    expect((fetchMock.mock.calls[0][1] as RequestInit).signal).toBeInstanceOf(
+      AbortSignal,
+    );
 
     expect(response.mode).toBe('openai-compatible');
     expect(body.messages).toEqual(
@@ -304,6 +317,67 @@ describe('AiService', () => {
     expect(body.messages.at(-1)?.content).toContain('Context:');
 
     fetchMock.mockRestore();
+  });
+
+  it('rejects unsafe OpenAI-compatible base URL schemes', async () => {
+    await expect(
+      service.updateConfig({
+        mode: 'openai-compatible',
+        baseUrl: 'file:///tmp/model',
+        model: 'gpt-test',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(prisma.aiConfig.upsert).not.toHaveBeenCalled();
+  });
+
+  it('rotates legacy API key encryption when loading config', async () => {
+    const originalSecret = process.env.AI_CONFIG_SECRET;
+    const originalDatabaseUrl = process.env.DATABASE_URL;
+
+    try {
+      delete process.env.AI_CONFIG_SECRET;
+      process.env.DATABASE_URL = 'file:/legacy/moxu.db';
+      const legacyApiKey = encryptSecret('sk-legacy');
+      const saved: AiConfigRecord = {
+        id: 'default',
+        mode: 'openai-compatible',
+        baseUrl: 'https://api.example.com/v1',
+        model: 'gpt-test',
+        apiKey: legacyApiKey,
+        embeddingProvider: 'local',
+        embeddingModel: null,
+        ragSourceCount: 5,
+        ragContextChars: 12000,
+        ragExcerptChars: 520,
+        updatedAt: new Date('2026-08-08T00:00:00.000Z'),
+      };
+
+      process.env.AI_CONFIG_SECRET = 'desktop-random-secret';
+      prisma.aiConfig.findUnique.mockResolvedValue(saved);
+      prisma.aiConfig.update.mockImplementation(({ data }) =>
+        Promise.resolve({ ...saved, apiKey: data.apiKey }),
+      );
+
+      await expect(service.getConfig()).resolves.toMatchObject({
+        apiKey: 'sk-legacy',
+      });
+
+      const update = prisma.aiConfig.update.mock.calls[0]?.[0];
+      expect(update?.data.apiKey).toMatch(/^enc:v1:/);
+      expect(update?.data.apiKey).not.toBe(legacyApiKey);
+    } finally {
+      if (originalSecret === undefined) {
+        delete process.env.AI_CONFIG_SECRET;
+      } else {
+        process.env.AI_CONFIG_SECRET = originalSecret;
+      }
+      if (originalDatabaseUrl === undefined) {
+        delete process.env.DATABASE_URL;
+      } else {
+        process.env.DATABASE_URL = originalDatabaseUrl;
+      }
+    }
   });
 
   it('persists bounded RAG settings with encrypted API keys', async () => {
@@ -380,7 +454,7 @@ describe('AiService', () => {
       },
     ]);
 
-    const events = [];
+    const events: AiChatStreamEvent[] = [];
     for await (const event of service.streamChat({
       message: 'React hooks',
       context: { bookId: 'book-1' },

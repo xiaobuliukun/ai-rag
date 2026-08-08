@@ -16,6 +16,11 @@ const ACTIVE_PHASES = new Set<ScanJobStatus['phase']>([
   'scanning',
   'indexing',
 ]);
+const TERMINAL_PHASES = new Set<ScanJobStatus['phase']>([
+  'completed',
+  'failed',
+  'cancelled',
+]);
 
 function getScanJobsFilePath() {
   return (
@@ -74,14 +79,14 @@ export class ScanJobsService {
     }
 
     this.controllers.get(id)?.abort();
-    this.patchJob(id, {
+    const cancelledJob = this.patchJob(id, {
       phase: 'cancelled',
       success: false,
       message: 'Scan cancelled',
       currentBook: undefined,
       completedAt: new Date().toISOString(),
     });
-    return this.getJob(id);
+    return cancelledJob ?? job;
   }
 
   private createJob(rootPath?: string, message = 'Queued scan') {
@@ -117,11 +122,6 @@ export class ScanJobsService {
       skippedBooks?: number;
     }>,
   ) {
-    this.updateProgress(id, {
-      phase: 'scanning',
-      message: 'Starting scan',
-    });
-
     try {
       const result = await action();
       this.patchJob(id, {
@@ -178,12 +178,17 @@ export class ScanJobsService {
       return;
     }
 
-    this.jobs.set(id, {
+    const nextJob = {
       ...current,
       ...patch,
       updatedAt: new Date().toISOString(),
-    });
+    };
+    this.jobs.set(id, nextJob);
+    if (TERMINAL_PHASES.has(nextJob.phase)) {
+      this.pruneJobs();
+    }
     this.saveJobs();
+    return nextJob;
   }
 
   private pruneJobs() {
@@ -192,7 +197,7 @@ export class ScanJobsService {
     }
 
     const removable = Array.from(this.jobs.values())
-      .filter((job) => job.phase === 'completed' || job.phase === 'failed')
+      .filter((job) => TERMINAL_PHASES.has(job.phase))
       .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
 
     for (const job of removable.slice(0, this.jobs.size - MAX_JOBS)) {

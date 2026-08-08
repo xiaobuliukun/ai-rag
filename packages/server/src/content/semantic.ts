@@ -1,12 +1,12 @@
-const VECTOR_SIZE = 96;
+export const LOCAL_EMBEDDING_DIMENSIONS = 96;
 
 export function buildLocalEmbedding(text: string): number[] {
-  const vector = new Array<number>(VECTOR_SIZE).fill(0);
+  const vector = new Array<number>(LOCAL_EMBEDDING_DIMENSIONS).fill(0);
   const tokens = tokenize(text);
 
   for (const token of tokens) {
     const hash = hashString(token);
-    const index = Math.abs(hash) % VECTOR_SIZE;
+    const index = Math.abs(hash) % LOCAL_EMBEDDING_DIMENSIONS;
     vector[index] += hash % 2 === 0 ? 1 : -1;
   }
 

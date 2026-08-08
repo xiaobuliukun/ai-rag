@@ -28,7 +28,10 @@ export function AssistantScreen() {
   const router = useRouter();
   const { colors } = useAppTheme();
   const { settings, readingContext } = useAppSettings();
-  const api = useMemo(() => createMoxuApi(settings.apiBaseUrl), [settings.apiBaseUrl]);
+  const api = useMemo(
+    () => createMoxuApi(settings.apiBaseUrl, settings.apiAccessToken),
+    [settings.apiAccessToken, settings.apiBaseUrl]
+  );
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);

@@ -95,6 +95,7 @@ export function ClientLayout({ children }: { children: React.ReactNode }) {
         </header>
 
         <main
+          data-app-scroll-container
           className={cn(
             "main-canvas min-h-0 flex-1 p-5",
             locksMainScroll ? "overflow-hidden" : "overflow-y-auto",

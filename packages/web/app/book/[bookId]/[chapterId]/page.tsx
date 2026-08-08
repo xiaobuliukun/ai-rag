@@ -1,13 +1,17 @@
 import { ChapterReader } from "@/components/chapter-reader";
 import { getBook, getChapter } from "@/lib/api";
+import { parseBookmarkPosition } from "@/lib/reader-scroll";
 import { notFound } from "next/navigation";
 
 export default async function ChapterPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ bookId: string; chapterId: string }>;
+  searchParams: Promise<{ position?: string | string[] }>;
 }) {
   const { bookId, chapterId } = await params;
+  const { position } = await searchParams;
   const [book, chapter] = await Promise.all([
     getBook(bookId).catch(() => null),
     getChapter(bookId, chapterId).catch(() => null),
@@ -27,10 +31,12 @@ export default async function ChapterPage({
 
   return (
     <ChapterReader
+      key={chapter.id}
       book={book}
       chapter={chapter}
       previousChapter={previousChapter}
       nextChapter={nextChapter}
+      initialBookmarkPosition={parseBookmarkPosition(position)}
     />
   );
 }

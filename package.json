@@ -23,11 +23,20 @@
     "desktop:dist:mac": "npm run build && npm run dist:mac -w packages/desktop",
     "desktop:dist:mac:signed": "npm run build && npm run dist:mac:signed -w packages/desktop",
     "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
+    "test:unit": "npm run test -w packages/desktop && npm run test -w packages/server -- --runInBand && npm run test -w packages/web -- --runInBand",
+    "test:desktop-runtime": "npm run prepare:runtime -w packages/desktop",
+    "test:all": "npm run lint && npm run typecheck && npm run test:unit && npm run test:e2e -w packages/server -- --runInBand && npm run build && npm run test:desktop-runtime && npm run test:smoke -w packages/web && npm run test:large",
+    "verify": "npm run test:all",
+    "pretest:large": "npm run build:server",
     "test:large": "node scripts/large-library-smoke.mjs",
     "clean": "rm -rf node_modules packages/*/node_modules packages/*/dist packages/web/.next"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=24.0.0"
+  },
+  "dependencies": {
+    "rxjs": "^7.8.2"
   }
 }

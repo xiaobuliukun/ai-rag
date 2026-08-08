@@ -82,4 +82,46 @@ describe('ScanJobsService', () => {
       message: 'Server restarted before this scan finished',
     });
   });
+
+  it('prunes cancelled jobs with the other terminal job states', async () => {
+    await fs.outputJson(
+      scanJobsFile,
+      Array.from({ length: 25 }, (_, index) => ({
+        id: `job-${index}`,
+        phase: 'cancelled',
+        success: false,
+        message: 'Scan cancelled',
+        booksTotal: 1,
+        booksScanned: 0,
+        chaptersScanned: 0,
+        skippedBooks: 0,
+        startedAt: new Date(Date.UTC(2026, 6, 1, 0, 0, index)).toISOString(),
+        updatedAt: new Date(Date.UTC(2026, 6, 1, 0, 0, index)).toISOString(),
+        completedAt: new Date(Date.UTC(2026, 6, 1, 0, 0, index)).toISOString(),
+      })),
+    );
+
+    const service = new ScanJobsService({} as never);
+
+    expect(() => service.getJob('job-0')).toThrow('Scan job not found');
+    expect(service.getJob('job-1').phase).toBe('cancelled');
+    expect(await fs.readJson(scanJobsFile)).toHaveLength(24);
+  });
+
+  it('shrinks an over-capacity active queue when a job becomes terminal', async () => {
+    const scanService = {
+      scanDirectory: jest.fn(() => new Promise<never>(() => undefined)),
+    };
+    const service = new ScanJobsService(scanService as never);
+    const jobs = Array.from({ length: 25 }, (_, index) =>
+      service.startScan(`/tmp/books-${index}`),
+    );
+
+    const cancelled = service.cancelJob(jobs[0].id);
+
+    expect(cancelled.phase).toBe('cancelled');
+    expect(() => service.getJob(jobs[0].id)).toThrow('Scan job not found');
+    expect(service.getJob(jobs[1].id).phase).toBe('queued');
+    expect(await fs.readJson(scanJobsFile)).toHaveLength(24);
+  });
 });

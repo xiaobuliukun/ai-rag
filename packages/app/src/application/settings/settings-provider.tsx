@@ -6,16 +6,20 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type PropsWithChildren
 } from "react";
 import { Platform } from "react-native";
-import type { AiContext, AiRuntimeConfig } from "@moxu/shared";
+import type {
+  AiContext,
+  AiRuntimeConfig,
+  ApiConnectionConfig
+} from "@moxu/shared";
 
 const SETTINGS_KEY = "moxu.mobile.settings.v1";
 
-export type AppSettings = {
-  apiBaseUrl: string;
+export type AppSettings = ApiConnectionConfig & {
   aiConfig: AiRuntimeConfig;
 };
 
@@ -24,6 +28,7 @@ type SettingsContextValue = {
   isSettingsReady: boolean;
   readingContext?: AiContext;
   setApiBaseUrl: (value: string) => Promise<void>;
+  setApiAccessToken: (value: string) => Promise<void>;
   setAiConfig: (value: Partial<AiRuntimeConfig>) => Promise<void>;
   setReadingContext: (context?: AiContext) => void;
   resetSettings: () => Promise<void>;
@@ -54,8 +59,14 @@ function defaultApiBaseUrl() {
   return "http://127.0.0.1:3001/api";
 }
 
+function defaultApiAccessToken() {
+  const configured = Constants.expoConfig?.extra?.apiAccessToken;
+  return typeof configured === "string" ? configured.trim() : "";
+}
+
 const defaultSettings: AppSettings = {
   apiBaseUrl: defaultApiBaseUrl(),
+  apiAccessToken: defaultApiAccessToken(),
   aiConfig: defaultAiConfig
 };
 
@@ -65,6 +76,8 @@ const SettingsContext = createContext<SettingsContextValue | undefined>(
 
 export function SettingsProvider({ children }: PropsWithChildren) {
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
+  const settingsRef = useRef<AppSettings>(defaultSettings);
+  const writeQueueRef = useRef<Promise<void>>(Promise.resolve());
   const [readingContext, setReadingContext] = useState<AiContext | undefined>();
   const [isSettingsReady, setIsSettingsReady] = useState(false);
 
@@ -77,13 +90,17 @@ export function SettingsProvider({ children }: PropsWithChildren) {
           return;
         }
         const parsed = JSON.parse(value) as Partial<AppSettings>;
-        setSettings({
+        const nextSettings = {
           apiBaseUrl: parsed.apiBaseUrl?.trim() || defaultSettings.apiBaseUrl,
+          apiAccessToken:
+            parsed.apiAccessToken?.trim() || defaultSettings.apiAccessToken,
           aiConfig: {
             ...defaultAiConfig,
             ...(parsed.aiConfig ?? {})
           }
-        });
+        };
+        settingsRef.current = nextSettings;
+        setSettings(nextSettings);
       })
       .catch(() => undefined)
       .finally(() => {
@@ -97,39 +114,59 @@ export function SettingsProvider({ children }: PropsWithChildren) {
     };
   }, []);
 
-  const persist = useCallback(async (nextSettings: AppSettings) => {
-    setSettings(nextSettings);
-    await SecureStore.setItemAsync(SETTINGS_KEY, JSON.stringify(nextSettings));
+  const enqueueWrite = useCallback(async (write: () => Promise<void>) => {
+    const pending = writeQueueRef.current.catch(() => undefined).then(write);
+    writeQueueRef.current = pending;
+    await pending;
   }, []);
+
+  const persist = useCallback(async (nextSettings: AppSettings) => {
+    settingsRef.current = nextSettings;
+    setSettings(nextSettings);
+    await enqueueWrite(() =>
+      SecureStore.setItemAsync(SETTINGS_KEY, JSON.stringify(nextSettings))
+    );
+  }, [enqueueWrite]);
 
   const setApiBaseUrl = useCallback(
     async (value: string) => {
       const next = value.trim().replace(/\/$/, "");
       await persist({
-        ...settings,
+        ...settingsRef.current,
         apiBaseUrl: next || defaultSettings.apiBaseUrl
       });
     },
-    [persist, settings]
+    [persist]
   );
 
   const setAiConfig = useCallback(
     async (value: Partial<AiRuntimeConfig>) => {
       await persist({
-        ...settings,
+        ...settingsRef.current,
         aiConfig: {
-          ...settings.aiConfig,
+          ...settingsRef.current.aiConfig,
           ...value
         }
       });
     },
-    [persist, settings]
+    [persist]
+  );
+
+  const setApiAccessToken = useCallback(
+    async (value: string) => {
+      await persist({
+        ...settingsRef.current,
+        apiAccessToken: value.trim()
+      });
+    },
+    [persist]
   );
 
   const resetSettings = useCallback(async () => {
-    await SecureStore.deleteItemAsync(SETTINGS_KEY);
+    settingsRef.current = defaultSettings;
     setSettings(defaultSettings);
-  }, []);
+    await enqueueWrite(() => SecureStore.deleteItemAsync(SETTINGS_KEY));
+  }, [enqueueWrite]);
 
   const value = useMemo<SettingsContextValue>(
     () => ({
@@ -137,6 +174,7 @@ export function SettingsProvider({ children }: PropsWithChildren) {
       isSettingsReady,
       readingContext,
       setApiBaseUrl,
+      setApiAccessToken,
       setAiConfig,
       setReadingContext,
       resetSettings
@@ -146,6 +184,7 @@ export function SettingsProvider({ children }: PropsWithChildren) {
       readingContext,
       resetSettings,
       setAiConfig,
+      setApiAccessToken,
       setApiBaseUrl,
       settings
     ]

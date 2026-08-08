@@ -7,6 +7,8 @@
   "author": "Moxu",
   "scripts": {
     "dev": "electron .",
+    "test": "node --test test/*.test.cjs",
+    "prepare:runtime": "node scripts/prepare-runtime.cjs",
     "pack": "electron-builder --dir --publish never",
     "dist": "electron-builder --publish never",
     "dist:mac": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg zip --publish never",
@@ -15,15 +17,18 @@
     "dist:linux": "electron-builder --linux AppImage deb --publish never"
   },
   "dependencies": {
-    "electron-updater": "6.6.2"
+    "electron-updater": "6.8.9"
   },
   "devDependencies": {
-    "electron": "38.2.2",
+    "@electron/rebuild": "4.0.6",
+    "electron": "39.8.10",
     "electron-builder": "26.15.3"
   },
   "build": {
     "appId": "app.moxu.desktop",
     "productName": "墨序",
+    "beforePack": "./scripts/before-pack.cjs",
+    "afterPack": "./scripts/after-pack.cjs",
     "directories": {
       "output": "../../release/desktop"
     },
@@ -33,59 +38,25 @@
     ],
     "extraResources": [
       {
-        "from": "../../package.json",
+        "from": "../../.moxu/desktop-runtime/package.json",
         "to": "runtime/package.json"
       },
       {
-        "from": "../../package-lock.json",
-        "to": "runtime/package-lock.json"
+        "from": "../../.moxu/desktop-runtime/node_modules",
+        "to": "runtime/node_modules"
       },
       {
-        "from": "../../node_modules",
-        "to": "runtime/node_modules",
-        "filter": [
-          "**/*",
-          "!@moxu/desktop",
-          "!@moxu/desktop/**/*"
-        ]
+        "from": "../../.moxu/desktop-runtime/packages",
+        "to": "runtime/packages"
       },
       {
-        "from": "../../packages/server/dist",
-        "to": "runtime/packages/server/dist"
+        "from": "../../.moxu/desktop-runtime/web",
+        "to": "runtime/web"
       },
       {
-        "from": "../../packages/server/package.json",
-        "to": "runtime/packages/server/package.json"
-      },
-      {
-        "from": "../../packages/server/prisma",
-        "to": "runtime/packages/server/prisma"
-      },
-      {
-        "from": "../../packages/shared/dist",
-        "to": "runtime/packages/shared/dist"
-      },
-      {
-        "from": "../../packages/shared/package.json",
-        "to": "runtime/packages/shared/package.json"
-      },
-      {
-        "from": "../../packages/web/.next",
-        "to": "runtime/packages/web/.next"
-      },
-      {
-        "from": "../../packages/web/public",
-        "to": "runtime/packages/web/public"
-      },
-      {
-        "from": "../../packages/web/package.json",
-        "to": "runtime/packages/web/package.json"
+        "from": "../../.moxu/desktop-runtime/web/node_modules",
+        "to": "runtime/web/node_modules"
       }
-    ],
-    "asarUnpack": [
-      "node_modules/better-sqlite3/**/*",
-      "node_modules/@prisma/**/*",
-      "node_modules/.prisma/**/*"
     ],
     "mac": {
       "category": "public.app-category.education",

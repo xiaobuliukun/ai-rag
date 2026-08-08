@@ -1,18 +1,36 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
+  Image,
   Pressable,
   ScrollView,
   StyleSheet,
   View
 } from "react-native";
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { ArrowLeft, CheckCircle2, FileText } from "lucide-react-native";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
+import {
+  ArrowLeft,
+  CheckCircle2,
+  FileText,
+  Pencil,
+  Save,
+  Trash2,
+  X
+} from "lucide-react-native";
 import type { Book } from "@moxu/shared";
 import { useAppTheme } from "@/application/providers/root-providers";
 import { useAppSettings } from "@/application/settings/settings-provider";
-import { AppText, Button, Card, Screen, SectionHeader } from "@/design-system/ui/primitives";
+import {
+  AppText,
+  Button,
+  Card,
+  Field,
+  Screen,
+  SectionHeader
+} from "@/design-system/ui/primitives";
 import { sortChapters } from "@/domains/library/models";
+import { resolveBookCoverSource } from "@/infrastructure/api/book-assets";
 import { createMoxuApi } from "@/infrastructure/api/moxu-api";
 
 export function BookScreen() {
@@ -20,10 +38,19 @@ export function BookScreen() {
   const { bookId } = useLocalSearchParams<{ bookId: string }>();
   const { colors } = useAppTheme();
   const { settings } = useAppSettings();
-  const api = useMemo(() => createMoxuApi(settings.apiBaseUrl), [settings.apiBaseUrl]);
+  const api = useMemo(
+    () => createMoxuApi(settings.apiBaseUrl, settings.apiAccessToken),
+    [settings.apiAccessToken, settings.apiBaseUrl]
+  );
   const [book, setBook] = useState<Book | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isEditing, setIsEditing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
+  const [descriptionDraft, setDescriptionDraft] = useState("");
+  const [tagsDraft, setTagsDraft] = useState("");
+  const [coverDraft, setCoverDraft] = useState("");
 
   const load = useCallback(async () => {
     if (!bookId) {
@@ -31,7 +58,12 @@ export function BookScreen() {
     }
     setError(null);
     try {
-      setBook(await api.getBook(bookId));
+      const nextBook = await api.getBook(bookId);
+      setBook(nextBook);
+      setTitleDraft(nextBook.title);
+      setDescriptionDraft(nextBook.description ?? "");
+      setTagsDraft((nextBook.tags ?? []).join(", "));
+      setCoverDraft(nextBook.coverImage ?? "");
     } catch (err) {
       setError(err instanceof Error ? err.message : "无法读取书籍");
     } finally {
@@ -39,11 +71,76 @@ export function BookScreen() {
     }
   }, [api, bookId]);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  useFocusEffect(
+    useCallback(() => {
+      setIsLoading(true);
+      void load();
+    }, [load])
+  );
 
   const chapters = sortChapters(book?.chapters ?? []);
+  const coverSource = useMemo(
+    () =>
+      book
+        ? resolveBookCoverSource({
+            apiBaseUrl: settings.apiBaseUrl,
+            apiAccessToken: settings.apiAccessToken,
+            bookId: book.id,
+            coverImage: book.coverImage
+          })
+        : undefined,
+    [book, settings.apiAccessToken, settings.apiBaseUrl]
+  );
+
+  const handleSaveBook = async () => {
+    if (!book) {
+      return;
+    }
+
+    setIsSaving(true);
+    setError(null);
+    try {
+      const updated = await api.updateBook(book.id, {
+        title: titleDraft.trim(),
+        description: descriptionDraft.trim() || null,
+        coverImage: coverDraft.trim() || null,
+        tags: tagsDraft
+          .split(/[,，]/)
+          .map((tag) => tag.trim())
+          .filter(Boolean)
+      });
+      setBook(updated);
+      setIsEditing(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存书籍失败");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDeleteBook = () => {
+    if (!book) {
+      return;
+    }
+
+    Alert.alert("删除书籍", `确定从墨序中删除《${book.title}》吗？不会删除原始文件。`, [
+      { text: "取消", style: "cancel" },
+      {
+        text: "删除",
+        style: "destructive",
+        onPress: () => {
+          setIsSaving(true);
+          void api
+            .deleteBook(book.id)
+            .then(() => router.back())
+            .catch((err: unknown) => {
+              setError(err instanceof Error ? err.message : "删除书籍失败");
+            })
+            .finally(() => setIsSaving(false));
+        }
+      }
+    ]);
+  };
 
   return (
     <Screen>
@@ -62,7 +159,7 @@ export function BookScreen() {
             <ActivityIndicator color={colors.primary} />
             <AppText tone="muted">正在打开书籍</AppText>
           </View>
-        ) : error || !book ? (
+        ) : !book ? (
           <Card>
             <AppText variant="subtitle">打开失败</AppText>
             <AppText tone="danger" style={styles.gapTop}>
@@ -71,15 +168,95 @@ export function BookScreen() {
           </Card>
         ) : (
           <>
-            <Card>
-              <AppText variant="title">{book.title}</AppText>
-              <AppText tone="muted" style={styles.path}>
-                {book.path}
-              </AppText>
-              {book.description ? (
-                <AppText style={styles.description}>{book.description}</AppText>
-              ) : null}
+            <Card style={styles.bookDetails}>
+              {isEditing ? (
+                <>
+                  <Field
+                    value={titleDraft}
+                    onChangeText={setTitleDraft}
+                    placeholder="书籍标题"
+                  />
+                  <Field
+                    value={descriptionDraft}
+                    onChangeText={setDescriptionDraft}
+                    placeholder="书籍描述"
+                    multiline
+                  />
+                  <Field
+                    value={tagsDraft}
+                    onChangeText={setTagsDraft}
+                    placeholder="标签，用逗号分隔"
+                  />
+                  <Field
+                    value={coverDraft}
+                    onChangeText={setCoverDraft}
+                    placeholder="封面 URL、data URL 或书内相对路径"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                  <View style={styles.bookActions}>
+                    <Button
+                      title="保存"
+                      loading={isSaving}
+                      disabled={!titleDraft.trim()}
+                      icon={<Save color={colors.primaryForeground} size={16} />}
+                      onPress={() => void handleSaveBook()}
+                    />
+                    <Button
+                      title="取消"
+                      variant="ghost"
+                      icon={<X color={colors.primary} size={16} />}
+                      onPress={() => setIsEditing(false)}
+                    />
+                  </View>
+                </>
+              ) : (
+                <>
+                  <View style={styles.bookHeading}>
+                    {coverSource ? (
+                      <Image
+                        source={coverSource}
+                        accessibilityLabel={`${book.title} 封面`}
+                        resizeMode="cover"
+                        style={[styles.coverImage, { backgroundColor: colors.surfaceMuted }]}
+                      />
+                    ) : null}
+                    <View style={styles.bookHeadingText}>
+                      <AppText variant="title">{book.title}</AppText>
+                      <AppText tone="muted" style={styles.path}>
+                        {book.path}
+                      </AppText>
+                    </View>
+                    <Button
+                      title="编辑"
+                      variant="secondary"
+                      icon={<Pencil color={colors.foreground} size={16} />}
+                      onPress={() => setIsEditing(true)}
+                    />
+                  </View>
+                  {book.description ? (
+                    <AppText style={styles.description}>{book.description}</AppText>
+                  ) : null}
+                  {(book.tags ?? []).length > 0 ? (
+                    <AppText variant="caption" tone="muted">
+                      {(book.tags ?? []).join(" · ")}
+                    </AppText>
+                  ) : null}
+                  <Button
+                    title="删除书籍记录"
+                    variant="ghost"
+                    icon={<Trash2 color={colors.danger} size={16} />}
+                    onPress={handleDeleteBook}
+                  />
+                </>
+              )}
             </Card>
+
+            {error ? (
+              <Card>
+                <AppText tone="danger">{error}</AppText>
+              </Card>
+            ) : null}
 
             <SectionHeader
               title="章节"
@@ -147,6 +324,28 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 12,
     paddingVertical: 56
+  },
+  bookDetails: {
+    gap: 12
+  },
+  bookHeading: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12
+  },
+  bookHeadingText: {
+    flex: 1,
+    minWidth: 0
+  },
+  coverImage: {
+    width: 72,
+    height: 96,
+    borderRadius: 8
+  },
+  bookActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10
   },
   gapTop: {
     marginTop: 8

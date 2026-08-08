@@ -79,11 +79,20 @@ export class SearchService {
       return [];
     }
 
-    const [books, chapters, chunks] = await Promise.all([
+    const [books, chapters, ftsResults] = await Promise.all([
       this.searchBooks(analysis, bookId, resultType),
       this.searchChapters(analysis, bookId, resultType),
-      this.searchContent(analysis, bookId, resultType),
+      this.searchFtsContent(analysis, bookId, resultType),
     ]);
+    const semanticResults =
+      books.length === 0 && chapters.length === 0 && ftsResults.length === 0
+        ? await this.searchSemanticContent(analysis, bookId, resultType)
+        : [];
+    const chunks = mergeContentResults(
+      analysis,
+      ftsResults,
+      semanticResults,
+    ).slice(0, MAX_RESULTS);
 
     const bookResults: SearchResult[] = books.map((book) => ({
       id: book.id,
@@ -193,32 +202,36 @@ export class SearchService {
     });
   }
 
-  private async searchContent(
+  private searchFtsContent(
     analysis: QueryAnalysis,
     bookId: string | undefined,
     resultType: SearchResultType,
   ): Promise<ContentSearchResult[]> {
     if (resultType !== 'all' && resultType !== 'content') {
-      return [];
+      return Promise.resolve([]);
     }
 
-    const [ftsResults, semanticResults] = await Promise.all([
-      this.contentIndex.search(analysis.raw, {
-        bookId,
-        limit: CONTENT_FETCH_LIMIT,
-      }),
-      this.contentIndex
-        .semanticSearch(analysis.raw, {
-          bookId,
-          limit: Math.min(24, CONTENT_FETCH_LIMIT),
-        })
-        .catch(() => [] as SemanticSearchResult[]),
-    ]);
+    return this.contentIndex.search(analysis.raw, {
+      bookId,
+      limit: CONTENT_FETCH_LIMIT,
+    });
+  }
 
-    return mergeContentResults(analysis, ftsResults, semanticResults).slice(
-      0,
-      MAX_RESULTS,
-    );
+  private searchSemanticContent(
+    analysis: QueryAnalysis,
+    bookId: string | undefined,
+    resultType: SearchResultType,
+  ): Promise<SemanticSearchResult[]> {
+    if (resultType !== 'all' && resultType !== 'content') {
+      return Promise.resolve([]);
+    }
+
+    return this.contentIndex
+      .semanticSearch(analysis.raw, {
+        bookId,
+        limit: Math.min(24, CONTENT_FETCH_LIMIT),
+      })
+      .catch(() => [] as SemanticSearchResult[]);
   }
 }
 

@@ -1,15 +1,10 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { createCorsOptions, createLocalAccessGuard } from './cors';
+import { configureHttpApplication } from './http';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
-
-  app.use(createLocalAccessGuard());
-  app.enableCors(createCorsOptions());
-
-  // Set global prefix
-  app.setGlobalPrefix('api');
+  const app = await NestFactory.create(AppModule, { bodyParser: false });
+  configureHttpApplication(app);
 
   const port = process.env.PORT ?? 3001;
   const host = process.env.HOST ?? '127.0.0.1';

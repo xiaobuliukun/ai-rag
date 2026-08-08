@@ -7,6 +7,7 @@ const config: ExpoConfig = {
   scheme: "moxu",
   orientation: "portrait",
   userInterfaceStyle: "automatic",
+  platforms: ["ios", "android"],
   ios: {
     bundleIdentifier: "app.moxu.mobile",
     supportsTablet: true
@@ -14,12 +15,18 @@ const config: ExpoConfig = {
   android: {
     package: "app.moxu.mobile"
   },
-  plugins: ["expo-router", "expo-secure-store", "expo-splash-screen"],
+  plugins: [
+    "expo-router",
+    "expo-secure-store",
+    "expo-splash-screen",
+    "expo-status-bar"
+  ],
   experiments: {
     typedRoutes: false
   },
   extra: {
-    apiBaseUrl: process.env.EXPO_PUBLIC_API_BASE_URL
+    apiBaseUrl: process.env.EXPO_PUBLIC_API_BASE_URL,
+    apiAccessToken: process.env.EXPO_PUBLIC_API_ACCESS_TOKEN
   }
 };
 

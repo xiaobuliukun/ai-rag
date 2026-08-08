@@ -115,8 +115,6 @@ export class BackupService {
   private async replaceBackup(
     payload: BackupPayload,
   ): Promise<ImportBackupResponse> {
-    await this.prisma.$executeRawUnsafe('DELETE FROM "ChapterChunkFts"');
-
     await this.prisma.$transaction(async (tx) => {
       await tx.vectorData.deleteMany();
       await tx.chapterChunk.deleteMany();
@@ -216,9 +214,7 @@ export class BackupService {
       }
     });
 
-    for (const book of payload.books) {
-      await this.contentIndex.syncBook(book.id);
-    }
+    await this.contentIndex.rebuildIndex();
 
     const chaptersImported = payload.books.reduce(
       (total, book) => total + (book.chapters?.length ?? 0),
@@ -227,7 +223,9 @@ export class BackupService {
 
     return {
       success: true,
-      message: `Imported ${payload.books.length} books, ${chaptersImported} chapters`,
+      message:
+        `Imported ${payload.books.length} books, ${chaptersImported} chapters. ` +
+        'AI API keys are not included in backups and must be entered again.',
       booksImported: payload.books.length,
       chaptersImported,
       bookmarksImported: payload.bookmarks?.length ?? 0,
@@ -438,6 +436,7 @@ export class BackupService {
     if (!aiConfig) {
       return Promise.resolve();
     }
+    const encryptedApiKey = encryptSecret(aiConfig.apiKey);
 
     return tx.aiConfig.upsert({
       where: { id: DEFAULT_AI_CONFIG_ID },
@@ -445,7 +444,7 @@ export class BackupService {
         mode: aiConfig.mode,
         baseUrl: aiConfig.baseUrl ?? null,
         model: aiConfig.model ?? null,
-        apiKey: encryptSecret(aiConfig.apiKey),
+        ...(encryptedApiKey ? { apiKey: encryptedApiKey } : {}),
         embeddingProvider:
           aiConfig.embeddingProvider === 'openai-compatible'
             ? 'openai-compatible'
@@ -460,7 +459,7 @@ export class BackupService {
         mode: aiConfig.mode,
         baseUrl: aiConfig.baseUrl ?? null,
         model: aiConfig.model ?? null,
-        apiKey: encryptSecret(aiConfig.apiKey),
+        apiKey: encryptedApiKey,
         embeddingProvider:
           aiConfig.embeddingProvider === 'openai-compatible'
             ? 'openai-compatible'

@@ -31,6 +31,7 @@ type ScanOptions = {
 @Injectable()
 export class ScanService {
   private readonly logger = new Logger(ScanService.name);
+  private scanOperationTail: Promise<void> = Promise.resolve();
 
   constructor(
     private prisma: PrismaService,
@@ -42,6 +43,12 @@ export class ScanService {
     optionsOrProgress?: ScanOptions | ScanProgressReporter,
   ) {
     const options = normalizeScanOptions(optionsOrProgress);
+    return this.enqueueScanOperation(() =>
+      this.scanDirectoryUnsafe(rootDir, options),
+    );
+  }
+
+  private async scanDirectoryUnsafe(rootDir: string, options: ScanOptions) {
     this.logger.log(`Scanning directory: ${rootDir}`);
 
     await this.assertDirectory(rootDir);
@@ -92,6 +99,12 @@ export class ScanService {
     optionsOrProgress?: ScanOptions | ScanProgressReporter,
   ) {
     const options = normalizeScanOptions(optionsOrProgress);
+    return this.enqueueScanOperation(() =>
+      this.rescanKnownBooksUnsafe(options),
+    );
+  }
+
+  private async rescanKnownBooksUnsafe(options: ScanOptions) {
     const books = await this.prisma.book.findMany({
       select: {
         path: true,
@@ -159,6 +172,15 @@ export class ScanService {
     };
   }
 
+  private enqueueScanOperation<T>(operation: () => Promise<T>) {
+    const result = this.scanOperationTail.then(operation, operation);
+    this.scanOperationTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
   private async assertDirectory(directoryPath: string) {
     if (!fs.existsSync(directoryPath)) {
       throw new Error(`Directory not found: ${directoryPath}`);
@@ -195,7 +217,7 @@ export class ScanService {
     // Create or update Book
     const book = await this.prisma.book.upsert({
       where: { path: bookPath },
-      update: { title: bookTitle },
+      update: {},
       create: {
         title: bookTitle,
         path: bookPath,
@@ -203,25 +225,37 @@ export class ScanService {
     });
 
     const chapterFiles = await this.findMarkdownFiles(bookPath);
+    let bookChanged = false;
 
     for (const [index, file] of chapterFiles.entries()) {
       assertNotCancelled(options.signal);
-      await this.processChapter(book.id, file, index);
+      bookChanged =
+        (await this.processChapter(book.id, file, index)) || bookChanged;
     }
 
     assertNotCancelled(options.signal);
-    await this.removeMissingChapters(
-      book.id,
-      chapterFiles.map((file) => file.relativePath),
-    );
-    options.onProgress?.({
-      phase: 'indexing',
-      currentBook: bookTitle,
-      message: `Indexing ${bookTitle}`,
-    });
-    assertNotCancelled(options.signal);
-    await this.contentIndex.syncBook(book.id);
-    assertNotCancelled(options.signal);
+    bookChanged =
+      (await this.removeMissingChapters(
+        book.id,
+        chapterFiles.map((file) => file.relativePath),
+      )) || bookChanged;
+
+    if (bookChanged) {
+      options.onProgress?.({
+        phase: 'indexing',
+        currentBook: bookTitle,
+        message: `Indexing ${bookTitle}`,
+      });
+      assertNotCancelled(options.signal);
+      if (options.signal) {
+        await this.contentIndex.syncBook(book.id, {
+          signal: options.signal,
+        });
+      } else {
+        await this.contentIndex.syncBook(book.id);
+      }
+      assertNotCancelled(options.signal);
+    }
 
     return chapterFiles.length;
   }
@@ -268,12 +302,13 @@ export class ScanService {
   }
 
   private async removeMissingChapters(bookId: string, fileNames: string[]) {
-    await this.prisma.chapter.deleteMany({
+    const result = await this.prisma.chapter.deleteMany({
       where: {
         bookId,
         ...(fileNames.length > 0 ? { fileName: { notIn: fileNames } } : {}),
       },
     });
+    return result.count > 0;
   }
 
   private async processChapter(
@@ -294,26 +329,51 @@ export class ScanService {
       title = title.replace(/^\d+[-_.]\s*/, '');
     }
 
-    const chapter = await this.prisma.chapter.upsert({
-      where: {
-        bookId_fileName: {
-          bookId,
-          fileName: file.relativePath,
-        },
-      },
-      update: {
-        title,
-        orderIndex,
-        content, // Storing content in DB for RAG/Search later
-      },
-      create: {
+    const where = {
+      bookId_fileName: {
         bookId,
-        title,
         fileName: file.relativePath,
-        orderIndex,
-        content,
+      },
+    };
+    const existing = await this.prisma.chapter.findUnique({
+      where,
+      select: {
+        id: true,
+        title: true,
+        orderIndex: true,
+        content: true,
+        updatedAt: true,
       },
     });
+    const contentChanged = !existing || existing.content !== content;
+    const metadataChanged =
+      existing !== null &&
+      (existing.title !== title || existing.orderIndex !== orderIndex);
+    const chapter = existing
+      ? metadataChanged || contentChanged
+        ? await this.prisma.chapter.update({
+            where: { id: existing.id },
+            data: {
+              title,
+              orderIndex,
+              content,
+              updatedAt: existing.updatedAt,
+            },
+          })
+        : existing
+      : await this.prisma.chapter.create({
+          data: {
+            bookId,
+            title,
+            fileName: file.relativePath,
+            orderIndex,
+            content,
+          },
+        });
+
+    if (!contentChanged) {
+      return metadataChanged;
+    }
 
     const chunks = chunkMarkdownContent(content);
     await this.prisma.chapterChunk.deleteMany({
@@ -332,6 +392,8 @@ export class ScanService {
         })),
       });
     }
+
+    return true;
   }
 }
 

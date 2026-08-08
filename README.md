@@ -36,7 +36,7 @@ scripts/
 
 - `packages/server`：NestJS 11、Prisma 7、better-sqlite3、SQLite、SQLite FTS5
 - `packages/web`：Next.js 16 App Router、React 19、Tailwind CSS 4、Zustand
-- `packages/app`：Expo SDK 54、React Native 0.81、Expo Router、SecureStore
+- `packages/app`：Expo SDK 57、React Native 0.86、Expo Router、SecureStore
 - `packages/desktop`：Electron、electron-builder、electron-updater
 - `packages/shared`：共享 DTO、实体和 API 类型
 
@@ -90,6 +90,8 @@ npm run dev
 npm run build
 npm run lint
 npm run test
+npm run test:unit
+npm run verify
 
 # Web
 npm run dev:web
@@ -109,6 +111,7 @@ npm run typecheck -w packages/app
 
 # Desktop
 npm run desktop:dev
+npm run test -w packages/desktop
 npm run desktop:pack
 npm run desktop:dist:mac
 npm run desktop:dist:mac:signed
@@ -131,23 +134,27 @@ npm run test:large
 DATABASE_URL="file:./dev.db"
 CORS_ORIGINS="http://127.0.0.1:3000,http://localhost:3000"
 ALLOW_REMOTE_API="false"
+API_ACCESS_TOKEN=""
+API_BODY_LIMIT="50mb"
 AI_CONFIG_SECRET="replace-with-a-long-random-secret"
 
 AI_BASE_URL="https://api.openai.com/v1"
 AI_MODEL="gpt-4o-mini"
 AI_API_KEY=""
+AI_REQUEST_TIMEOUT_MS="60000"
 
 AI_EMBEDDING_PROVIDER="local"
 AI_EMBEDDING_BASE_URL="https://api.openai.com/v1"
 AI_EMBEDDING_MODEL="text-embedding-3-small"
 AI_EMBEDDING_API_KEY=""
+AI_EMBEDDING_TIMEOUT_MS="30000"
 
 AI_RAG_SOURCE_COUNT="5"
 AI_RAG_CONTEXT_CHARS="12000"
 AI_RAG_EXCERPT_CHARS="520"
 ```
 
-移动端可通过 `EXPO_PUBLIC_API_BASE_URL` 指定默认 API 地址，也可以在 App 设置页保存到 SecureStore。
+移动端可通过 `EXPO_PUBLIC_API_BASE_URL` 指定默认 API 地址，也可以在 App 设置页保存到 SecureStore。启用远程 API 时，可在 App 设置页填写访问令牌（同样保存在 SecureStore），或用 `EXPO_PUBLIC_API_ACCESS_TOKEN` 提供开发期默认值。Web 端可使用 `NEXT_PUBLIC_API_ACCESS_TOKEN`，所有 API fetch 和受保护的本地图片请求都会携带 Bearer Token。JSON 和表单请求体默认上限为 `50mb`，可通过 `API_BODY_LIMIT` 调整。
 
 ## 书库目录约定
 
@@ -224,13 +231,13 @@ GET    /api/assets/books/:bookId/files?path=...
 
 1. 书籍和章节元数据：通过 Prisma `contains` 查询标题、描述、标签、文件名。
 2. 正文全文检索：扫描时把 chunk 写入 SQLite FTS5 表，通过 `MATCH` 和 `bm25` 排序。
-3. 语义检索：扫描时为 chunk 写入 `VectorData`，查询时计算余弦相似度。
+3. 语义检索：扫描时为 chunk 写入 `VectorData`，当书名、章节名和 FTS 都无词法命中时，再用余弦相似度做回退，远程 Embedding 不会拖慢已有关键词结果。
 
 Embedding 默认使用本地 hash 向量，不需要外部服务。配置 `AI_EMBEDDING_PROVIDER=openai-compatible` 并提供 key 后，会调用兼容 `/embeddings` 的接口。向量配置变化时，服务会自动重建本地向量数据。
 
-AI 默认使用本地抽取式回答，不会编造未在资料中出现的结论。配置 OpenAI-compatible `baseUrl`、`model`、`apiKey` 后，会调用兼容 `/chat/completions` 的接口生成回答。如果远程模型请求失败且已检索到资料，会自动降级为本地抽取式回答。
+AI 默认使用本地抽取式回答，不会编造未在资料中出现的结论。RAG 先使用当前章节、FTS 和本地章节内容，只有本地来源无有效命中时才尝试语义回退。配置 OpenAI-compatible `baseUrl`、`model`、`apiKey` 后，会调用兼容 `/chat/completions` 的接口生成回答。如果远程模型请求失败且已检索到资料，会自动降级为本地抽取式回答。
 
-建议在 `packages/server/.env` 中设置稳定的 `AI_CONFIG_SECRET`，用于加密保存 API Key。
+独立运行 Server 时，建议在 `packages/server/.env` 中设置稳定的 `AI_CONFIG_SECRET`，用于加密保存 API Key。Desktop 会在首次启动时自动生成仅当前用户可读的随机密钥并持续复用。
 
 ## Web 端
 
@@ -243,7 +250,7 @@ Web 端位于 `packages/web`，主要页面：
 - `/management`：书籍管理、封面、书签、备份、重扫
 - `/settings`：阅读偏好、主题、语言、AI/RAG 配置
 
-Web 使用 Zustand 持久化本地阅读偏好，包括侧栏、AI 面板宽度、字号、行高、亮度、护眼色温、休息提醒和 AI 配置。
+Web 使用 Zustand 持久化本地阅读偏好，包括侧栏、AI 面板宽度、字号、行高、亮度、护眼色温和休息提醒。API Key 不写入 Zustand、localStorage 或前端偏好备份。
 
 ## 移动端
 
@@ -263,23 +270,24 @@ packages/app/src/
 当前移动端已实现：
 
 - 书库列表和阅读统计
-- 服务端路径扫描和扫描任务进度
-- 书籍章节列表
-- 章节阅读、Markdown 基础渲染和阅读进度保存
+- 服务端路径扫描、已知书籍重扫、扫描任务进度和取消
+- 书籍章节列表、书名/描述/标签/封面编辑与删除
+- 章节阅读、Markdown 基础渲染、阅读进度、真实阅读时长和位置恢复
+- 章节书签的创建、跳转和删除
 - 全库搜索
 - AI 问答
-- API 地址、AI 模式、Embedding 和 RAG 参数配置
+- API 地址、访问令牌、AI 模式、Embedding 和 RAG 参数配置
 
 移动端调试提示：
 
 - iOS 模拟器可以直接使用 `http://127.0.0.1:3001/api`。
 - Android 模拟器默认使用 `http://10.0.2.2:3001/api`。
-- 真机必须使用电脑局域网 IP，并确保服务端允许对应 Host/CORS 配置。
+- 真机必须使用电脑局域网 IP，并同时设置 `ALLOW_REMOTE_API=true` 与非空 `API_ACCESS_TOKEN`，再在 App 设置页填写相同令牌。
 - 如果 `8081` 被其他 Metro 占用，可以执行 `npm run start -w packages/app -- --port 8082`。
 
 ## 桌面端
 
-桌面端位于 `packages/desktop`。Electron 壳会启动本地 API 和 Web 服务，并在窗口中打开 `http://127.0.0.1:3000`。
+桌面端位于 `packages/desktop`。Electron 壳会先应用 Prisma migration，再启动本地 API 和 Next standalone Web 服务，默认在窗口中打开 `http://127.0.0.1:3000`。可用 `MOXU_WEB_PORT` 和 `MOXU_API_PORT` 修改端口；两者必须不同且启动前会检查占用，自定义 Web 端口会自动加入本地 CORS 来源。
 
 常用产物：
 
@@ -309,21 +317,31 @@ packages/app/src/
 
 导出的 AI API Key 会脱敏，不会写入备份文件。
 
-导入后会重建受影响书籍的 FTS 和向量索引。
+导入后会重建受影响书籍的 FTS 和向量索引。由于备份不包含密钥，使用“替换”导入后需要在设置页重新填写 AI API Key；“合并”导入不会因备份省略密钥而清空现有 Key。
 
 ## 本地安全
 
-API 默认监听 `127.0.0.1`，并且默认只接受本机 Host：
+API 默认监听 `127.0.0.1`，并且默认同时校验请求的 Host 与实际 socket 来源地址。只有两者都属于本机回环地址时，才按本地请求放行：
 
 - `localhost`
 - `127.0.0.1`
 - `[::1]`
 
-即使误把 `HOST` 改成 `0.0.0.0`，非本机访问也会被拒绝。只有明确设置 `ALLOW_REMOTE_API=true` 时，才允许局域网或远程 Host 访问。
+因此，即使远程客户端伪造 `Host: localhost`，或误把 `HOST` 改成 `0.0.0.0`，默认仍会拒绝。只有明确设置 `ALLOW_REMOTE_API=true` 且提供非空 `API_ACCESS_TOKEN` 时，才允许非本机访问；缺少令牌时服务会拒绝远程请求。
 
-书籍资源接口会把请求路径限制在书籍目录内，防止通过 `..` 读取目录外文件。
+开放局域网访问前，必须生成高强度随机值并设置 `API_ACCESS_TOKEN`：
 
-AI API Key 使用 AES-256-GCM 加密后保存到本地 SQLite。加密密钥来自 `AI_CONFIG_SECRET`，如果未设置会退回到数据库 URL 或默认本地字符串，因此正式使用建议显式配置。
+```bash
+openssl rand -hex 32
+```
+
+配置后，所有非本机请求必须携带 `Authorization: Bearer <token>`；本机桌面/Web 默认模式仍不需要令牌。Web 客户端可配置 `NEXT_PUBLIC_API_ACCESS_TOKEN`，移动端可在设置页安全保存令牌。`NEXT_PUBLIC_*` 会进入浏览器产物，它只适合受信任的本地/局域网部署，不能替代正式的多用户登录体系。使用普通 HTTP 时令牌不会被加密传输，跨不可信网络应使用 HTTPS、VPN 或 SSH 隧道。
+
+书籍资源接口会同时检查规范路径与 `realpath`，防止通过 `..` 或符号链接读取书籍目录外文件；接口只提供常见图片格式，并返回 `nosniff` 与内容隔离响应头。
+
+AI API Key 使用 AES-256-GCM 加密后保存到本地 SQLite。Desktop 首次启动时会在用户数据目录生成权限为 `0600` 的随机 `AI_CONFIG_SECRET`；已有 Desktop 数据会兼容旧密钥并在读取配置时自动轮换。独立运行 Server 时如果未设置该变量，仍会退回到数据库 URL 或默认本地字符串，因此正式部署建议显式配置。
+
+OpenAI-compatible Chat 与 Embedding 的 Base URL 只接受带协议的 `http://` 或 `https://` 绝对地址，因此 `http://127.0.0.1:11434/v1` 等本地模型地址仍可用，而 `file:`、`ftp:` 等危险 scheme 会被拒绝。远程请求分别受 `AI_REQUEST_TIMEOUT_MS`（默认 60 秒）和 `AI_EMBEDDING_TIMEOUT_MS`（默认 30 秒）限制。
 
 ## 测试与质量
 
@@ -343,11 +361,12 @@ AI API Key 使用 AES-256-GCM 加密后保存到本地 SQLite。加密密钥来�
 推荐提交前运行：
 
 ```bash
-npm run typecheck -w packages/shared
-npm run typecheck -w packages/app
-npm run test -w packages/server
-npm run test -w packages/web
+npm run test:unit
+npm run typecheck
+npm run lint
 ```
+
+完整发布前验证可运行 `npm run verify`，它还会串行执行 Server E2E、全工作区构建、Web smoke 和大书库 smoke。
 
 如果改动 Web UI，再运行：
 
@@ -361,4 +380,4 @@ npm run test:smoke -w packages/web
 - 书库扫描只识别根目录下的一级子目录为书；根目录直接放 `.md` 不会被识别为独立书籍。
 - 移动端当前是核心闭环版本，Markdown 渲染为轻量实现，不等同于 Web 端完整 `react-markdown` 能力。
 - 本地 hash embedding 是轻量兜底方案，语义质量不等同于真实 embedding 模型。
-- 远程 AI 和 embedding 均依赖 OpenAI-compatible 服务可用性；失败时会降级到本地抽取式回答。
+- 远程 AI 和 embedding 均依赖 OpenAI-compatible 服务可用性；Chat 失败时会降级到本地抽取式回答，Embedding 失败时 FTS 关键词检索仍可用，旧向量会保留但不会通过 freshness 校验或参与新查询，等待后续成功重建。

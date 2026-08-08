@@ -24,14 +24,18 @@ async function readErrorMessage(response: Response) {
   return response.statusText || `Request failed with status ${response.status}`;
 }
 
-export function createApiClient(baseUrl: string) {
+export function createApiClient(baseUrl: string, accessToken?: string) {
   const root = baseUrl.replace(/\/$/, "");
+  const bearerToken = accessToken?.trim();
 
   async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetch(`${root}${path}`, {
       ...init,
       headers: {
         "Content-Type": "application/json",
+        ...(bearerToken
+          ? { Authorization: `Bearer ${bearerToken}` }
+          : {}),
         ...init?.headers
       }
     });

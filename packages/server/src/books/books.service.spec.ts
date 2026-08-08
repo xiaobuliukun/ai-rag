@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BooksService } from './books.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { ContentIndexService } from '../content/content-index.service';
 
 describe('BooksService', () => {
   let service: BooksService;
@@ -21,6 +22,10 @@ describe('BooksService', () => {
     },
     $transaction: jest.fn(),
   };
+  const contentIndex = {
+    syncBook: jest.fn(),
+    removeBook: jest.fn(),
+  };
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -31,6 +36,10 @@ describe('BooksService', () => {
         {
           provide: PrismaService,
           useValue: prisma,
+        },
+        {
+          provide: ContentIndexService,
+          useValue: contentIndex,
         },
       ],
     }).compile();
@@ -152,5 +161,40 @@ describe('BooksService', () => {
         readingSeconds: 900,
       },
     });
+  });
+
+  it('rebuilds the book index when its title changes', async () => {
+    prisma.book.findUnique
+      .mockResolvedValueOnce({ id: 'book-1', title: 'Old title' })
+      .mockResolvedValueOnce({
+        id: 'book-1',
+        title: 'New title',
+        tags: '[]',
+        chapters: [],
+      });
+    prisma.book.update.mockResolvedValue({ id: 'book-1' });
+
+    await expect(
+      service.updateBook('book-1', { title: ' New title ' }),
+    ).resolves.toMatchObject({
+      id: 'book-1',
+      title: 'New title',
+    });
+
+    expect(contentIndex.syncBook).toHaveBeenCalledWith('book-1');
+  });
+
+  it('removes the external indexes after deleting a book', async () => {
+    prisma.book.findUnique.mockResolvedValue({ id: 'book-1' });
+    prisma.book.delete.mockResolvedValue({ id: 'book-1' });
+
+    await expect(service.deleteBook('book-1')).resolves.toEqual({
+      success: true,
+    });
+
+    expect(prisma.book.delete).toHaveBeenCalledWith({
+      where: { id: 'book-1' },
+    });
+    expect(contentIndex.removeBook).toHaveBeenCalledWith('book-1');
   });
 });
