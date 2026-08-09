@@ -181,7 +181,35 @@ describe('BooksService', () => {
       title: 'New title',
     });
 
+    expect(prisma.book.update).toHaveBeenCalledWith({
+      where: { id: 'book-1' },
+      data: {
+        title: 'New title',
+        indexPending: true,
+        indexRevision: {
+          increment: 1,
+        },
+      },
+    });
     expect(contentIndex.syncBook).toHaveBeenCalledWith('book-1');
+  });
+
+  it('does not expose internal index retry state in book responses', async () => {
+    prisma.book.findMany.mockResolvedValue([
+      {
+        id: 'book-1',
+        title: 'React',
+        tags: '[]',
+        indexPending: true,
+        indexRevision: 3,
+        chapters: [],
+      },
+    ]);
+
+    const [book] = await service.findAll();
+
+    expect(book).not.toHaveProperty('indexPending');
+    expect(book).not.toHaveProperty('indexRevision');
   });
 
   it('removes the external indexes after deleting a book', async () => {

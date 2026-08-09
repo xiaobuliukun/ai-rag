@@ -19,10 +19,19 @@ export class BooksService {
   ) {}
 
   private withChapterStats<
-    T extends { chapters: Array<{ isRead: boolean }>; tags?: string | null },
+    T extends {
+      chapters: Array<{ isRead: boolean }>;
+      tags?: string | null;
+      indexPending?: boolean;
+      indexRevision?: number;
+    },
   >(book: T) {
+    const publicBook = { ...book };
+    delete publicBook.indexPending;
+    delete publicBook.indexRevision;
+
     return {
-      ...book,
+      ...publicBook,
       tags: parseTags(book.tags),
       totalChapters: book.chapters.length,
       readChapters: book.chapters.filter((chapter) => chapter.isRead).length,
@@ -31,7 +40,16 @@ export class BooksService {
 
   async findAll() {
     const books = await this.prisma.book.findMany({
-      include: {
+      select: {
+        id: true,
+        title: true,
+        path: true,
+        description: true,
+        tags: true,
+        coverImage: true,
+        lastRead: true,
+        createdAt: true,
+        updatedAt: true,
         chapters: {
           orderBy: [{ orderIndex: 'asc' }, { fileName: 'asc' }],
           select: {
@@ -131,7 +149,16 @@ export class BooksService {
   async findOne(id: string) {
     const book = await this.prisma.book.findUnique({
       where: { id },
-      include: {
+      select: {
+        id: true,
+        title: true,
+        path: true,
+        description: true,
+        tags: true,
+        coverImage: true,
+        lastRead: true,
+        createdAt: true,
+        updatedAt: true,
         chapters: {
           orderBy: [{ orderIndex: 'asc' }, { fileName: 'asc' }],
           select: {
@@ -179,6 +206,8 @@ export class BooksService {
       throw new BadRequestException('Cover image is too large');
     }
 
+    const titleChanged = Boolean(title && title !== existing.title);
+
     await this.prisma.book.update({
       where: { id },
       data: {
@@ -192,10 +221,18 @@ export class BooksService {
         ...(request.tags !== undefined
           ? { tags: JSON.stringify(normalizeTags(request.tags)) }
           : {}),
+        ...(titleChanged
+          ? {
+              indexPending: true,
+              indexRevision: {
+                increment: 1,
+              },
+            }
+          : {}),
       },
     });
 
-    if (title && title !== existing.title) {
+    if (titleChanged) {
       await this.contentIndex.syncBook(id);
     }
 

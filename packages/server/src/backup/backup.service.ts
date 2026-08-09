@@ -1,4 +1,6 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { createHash } from 'node:crypto';
+import { REPLACE_BACKUP_CONFIRMATION } from '@moxu/shared';
 import type {
   BackupPayload,
   ImportBackupMode,
@@ -15,6 +17,8 @@ const DEFAULT_AI_CONFIG_ID = 'default';
 
 @Injectable()
 export class BackupService {
+  private readonly logger = new Logger(BackupService.name);
+
   constructor(
     private prisma: PrismaService,
     private contentIndex: ContentIndexService,
@@ -57,8 +61,16 @@ export class BackupService {
       version: 1,
       exportedAt: new Date().toISOString(),
       books: books.map((book) => ({
-        ...book,
+        id: book.id,
+        title: book.title,
+        path: book.path,
+        description: book.description,
         tags: parseTags(book.tags),
+        coverImage: book.coverImage,
+        lastRead: book.lastRead,
+        createdAt: book.createdAt,
+        updatedAt: book.updatedAt,
+        chapters: book.chapters,
       })),
       bookmarks: bookmarks.map((bookmark) => ({
         id: bookmark.id,
@@ -99,14 +111,22 @@ export class BackupService {
   async importBackup(
     request: BackupPayload | ImportBackupRequest,
   ): Promise<ImportBackupResponse> {
-    const { payload, mode } = normalizeImportRequest(request);
+    const { payload, mode, replaceConfirmation } =
+      normalizeImportRequest(request);
 
     if (!payload || payload.version !== 1 || !Array.isArray(payload.books)) {
       throw new BadRequestException('Unsupported backup payload');
     }
+    assertUniqueBackupIds(payload);
 
     if (mode === 'merge') {
       return this.mergeBackup(payload);
+    }
+
+    if (replaceConfirmation !== REPLACE_BACKUP_CONFIRMATION) {
+      throw new BadRequestException(
+        'Replace import requires explicit confirmation',
+      );
     }
 
     return this.replaceBackup(payload);
@@ -116,6 +136,7 @@ export class BackupService {
     payload: BackupPayload,
   ): Promise<ImportBackupResponse> {
     await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe('DELETE FROM "ChapterChunkFts"');
       await tx.vectorData.deleteMany();
       await tx.chapterChunk.deleteMany();
       await tx.bookmark.deleteMany();
@@ -134,6 +155,8 @@ export class BackupService {
             tags: JSON.stringify(book.tags ?? []),
             coverImage: book.coverImage ?? null,
             lastRead: toDate(book.lastRead),
+            indexPending: true,
+            indexRevision: 1,
             createdAt: book.createdAt ? toDate(book.createdAt) : undefined,
           },
         });
@@ -214,18 +237,39 @@ export class BackupService {
       }
     });
 
-    await this.contentIndex.rebuildIndex();
-
     const chaptersImported = payload.books.reduce(
       (total, book) => total + (book.chapters?.length ?? 0),
       0,
     );
+    let rebuildFailed = false;
+
+    if (payload.books.length > 0) {
+      try {
+        await this.contentIndex.rebuildIndex();
+      } catch (error) {
+        rebuildFailed = true;
+        this.logIndexingFailure(
+          'Backup replacement was committed, but rebuilding the search index failed',
+          error,
+        );
+      }
+    }
+
+    const indexPending =
+      rebuildFailed ||
+      (payload.books.length > 0 &&
+        (await this.hasPendingIndexWork(payload.books.map((book) => book.id))));
+    const summary =
+      `Replaced the current library with ${payload.books.length} books, ` +
+      `${chaptersImported} chapters.`;
 
     return {
       success: true,
-      message:
-        `Imported ${payload.books.length} books, ${chaptersImported} chapters. ` +
-        'AI API keys are not included in backups and must be entered again.',
+      indexPending,
+      message: indexPending
+        ? `${summary} The replacement is committed, but search indexing is pending and will be retried. ` +
+          'AI API keys are not included in backups and must be entered again.'
+        : `${summary} AI API keys are not included in backups and must be entered again.`,
       booksImported: payload.books.length,
       chaptersImported,
       bookmarksImported: payload.bookmarks?.length ?? 0,
@@ -239,35 +283,39 @@ export class BackupService {
     const bookIdMap = new Map<string, string>();
     const chapterIdMap = new Map<string, string>();
 
-    await this.prisma.$transaction(async (tx) => {
+    const globalIndexBookCount = await this.prisma.$transaction(async (tx) => {
       for (const book of payload.books) {
-        const [existingById, existingByPath] = await Promise.all([
-          tx.book.findUnique({
-            where: { id: book.id },
-            select: { id: true },
-          }),
+        const [existingByPath, existingById] = await Promise.all([
           tx.book.findUnique({
             where: { path: book.path },
             select: { id: true },
           }),
+          tx.book.findUnique({
+            where: { id: book.id },
+            select: { id: true, path: true },
+          }),
         ]);
-        const targetBookId = existingById?.id ?? existingByPath?.id ?? book.id;
-        const canUpdatePath =
-          !existingByPath || existingByPath.id === targetBookId;
+        const targetBookId = existingByPath
+          ? existingByPath.id
+          : existingById
+            ? stableImportedId('book', book.id, book.path)
+            : book.id;
 
         bookIdMap.set(book.id, targetBookId);
         affectedBookIds.add(targetBookId);
 
-        if (existingById || existingByPath) {
+        if (existingByPath) {
           await tx.book.update({
             where: { id: targetBookId },
             data: {
               title: book.title,
-              ...(canUpdatePath ? { path: book.path } : {}),
+              path: book.path,
               description: book.description ?? null,
               tags: JSON.stringify(book.tags ?? []),
               coverImage: book.coverImage ?? null,
               lastRead: toDate(book.lastRead),
+              indexPending: true,
+              indexRevision: { increment: 1 },
             },
           });
         } else {
@@ -280,6 +328,8 @@ export class BackupService {
               tags: JSON.stringify(book.tags ?? []),
               coverImage: book.coverImage ?? null,
               lastRead: toDate(book.lastRead),
+              indexPending: true,
+              indexRevision: 1,
               createdAt: book.createdAt ? toDate(book.createdAt) : undefined,
             },
           });
@@ -303,8 +353,24 @@ export class BackupService {
           continue;
         }
 
-        await tx.bookmark.upsert({
+        const existingBookmark = await tx.bookmark.findUnique({
           where: { id: bookmark.id },
+          select: { bookId: true, chapterId: true },
+        });
+        const targetBookmarkId =
+          existingBookmark &&
+          (existingBookmark.bookId !== targetBookId ||
+            existingBookmark.chapterId !== targetChapterId)
+            ? stableImportedId(
+                'bookmark',
+                bookmark.id,
+                targetBookId,
+                targetChapterId,
+              )
+            : bookmark.id;
+
+        await tx.bookmark.upsert({
+          where: { id: targetBookmarkId },
           update: {
             bookId: targetBookId,
             chapterId: targetChapterId,
@@ -313,7 +379,7 @@ export class BackupService {
             position: bookmark.position,
           },
           create: {
-            id: bookmark.id,
+            id: targetBookmarkId,
             bookId: targetBookId,
             chapterId: targetChapterId,
             note: bookmark.note,
@@ -326,11 +392,41 @@ export class BackupService {
 
       if (payload.aiConfig) {
         await this.upsertAiConfig(tx, payload);
+        const marked = await tx.book.updateMany({
+          data: {
+            indexPending: true,
+            indexRevision: { increment: 1 },
+          },
+        });
+        return marked.count;
       }
+
+      return 0;
     });
 
-    for (const bookId of affectedBookIds) {
-      await this.contentIndex.syncBook(bookId);
+    let indexingFailed = false;
+    if (globalIndexBookCount > 0) {
+      try {
+        await this.contentIndex.rebuildIndex();
+      } catch (error) {
+        indexingFailed = true;
+        this.logIndexingFailure(
+          'Backup merge changed the global AI configuration, but rebuilding the search index failed',
+          error,
+        );
+      }
+    } else {
+      for (const bookId of affectedBookIds) {
+        try {
+          await this.contentIndex.syncBook(bookId);
+        } catch (error) {
+          indexingFailed = true;
+          this.logIndexingFailure(
+            `Backup merge was committed, but indexing book ${bookId} failed`,
+            error,
+          );
+        }
+      }
     }
 
     const chaptersImported = payload.books.reduce(
@@ -338,9 +434,21 @@ export class BackupService {
       0,
     );
 
+    const affectedIds = [...affectedBookIds];
+    const indexPending =
+      indexingFailed ||
+      (globalIndexBookCount > 0
+        ? await this.hasPendingIndexWork()
+        : affectedIds.length > 0 &&
+          (await this.hasPendingIndexWork(affectedIds)));
+    const summary = `Merged ${payload.books.length} books, ${chaptersImported} chapters.`;
+
     return {
       success: true,
-      message: `Merged ${payload.books.length} books, ${chaptersImported} chapters`,
+      indexPending,
+      message: indexPending
+        ? `${summary} The data import is committed, but search indexing is pending and will be retried.`
+        : summary,
       booksImported: payload.books.length,
       chaptersImported,
       bookmarksImported: payload.bookmarks?.length ?? 0,
@@ -352,23 +460,26 @@ export class BackupService {
     bookId: string,
     chapter: BackupPayload['books'][number]['chapters'][number],
   ) {
-    const existingById = await tx.chapter.findUnique({
-      where: { id: chapter.id },
-      select: { id: true },
-    });
-    const existingByFileName = existingById
-      ? null
-      : await tx.chapter.findUnique({
-          where: {
-            bookId_fileName: {
-              bookId,
-              fileName: chapter.fileName,
-            },
+    const [existingByFileName, existingById] = await Promise.all([
+      tx.chapter.findUnique({
+        where: {
+          bookId_fileName: {
+            bookId,
+            fileName: chapter.fileName,
           },
-          select: { id: true },
-        });
-    const targetChapterId =
-      existingById?.id ?? existingByFileName?.id ?? chapter.id;
+        },
+        select: { id: true },
+      }),
+      tx.chapter.findUnique({
+        where: { id: chapter.id },
+        select: { id: true, bookId: true, fileName: true },
+      }),
+    ]);
+    const targetChapterId = existingByFileName
+      ? existingByFileName.id
+      : existingById
+        ? stableImportedId('chapter', chapter.id, bookId, chapter.fileName)
+        : chapter.id;
     const chapterData = {
       bookId,
       title: chapter.title,
@@ -379,7 +490,7 @@ export class BackupService {
       progress: chapter.progress,
     };
 
-    if (existingById || existingByFileName) {
+    if (existingByFileName) {
       await tx.chapter.update({
         where: { id: targetChapterId },
         data: chapterData,
@@ -411,6 +522,28 @@ export class BackupService {
     }
 
     if (chapter.readingProgress) {
+      const [existingProgressForChapter, existingProgressById] =
+        await Promise.all([
+          tx.readingProgress.findUnique({
+            where: { chapterId: targetChapterId },
+            select: { id: true },
+          }),
+          tx.readingProgress.findUnique({
+            where: { id: chapter.readingProgress.id },
+            select: { chapterId: true },
+          }),
+        ]);
+      const targetProgressId = existingProgressForChapter
+        ? existingProgressForChapter.id
+        : existingProgressById &&
+            existingProgressById.chapterId !== targetChapterId
+          ? stableImportedId(
+              'reading-progress',
+              chapter.readingProgress.id,
+              targetChapterId,
+            )
+          : chapter.readingProgress.id;
+
       await tx.readingProgress.upsert({
         where: { chapterId: targetChapterId },
         update: {
@@ -419,7 +552,7 @@ export class BackupService {
           readingSeconds: chapter.readingProgress.readingSeconds ?? 0,
         },
         create: {
-          id: chapter.readingProgress.id,
+          id: targetProgressId,
           chapterId: targetChapterId,
           percentage: chapter.readingProgress.percentage,
           scrollPosition: chapter.readingProgress.scrollPosition,
@@ -471,6 +604,32 @@ export class BackupService {
       },
     });
   }
+
+  private async hasPendingIndexWork(bookIds?: string[]) {
+    try {
+      return (
+        (await this.prisma.book.count({
+          where: {
+            indexPending: true,
+            ...(bookIds ? { id: { in: bookIds } } : {}),
+          },
+        })) > 0
+      );
+    } catch (error) {
+      this.logIndexingFailure(
+        'Unable to confirm whether imported books still require indexing',
+        error,
+      );
+      return true;
+    }
+  }
+
+  private logIndexingFailure(message: string, error: unknown) {
+    this.logger.error(
+      message,
+      error instanceof Error ? error.stack : String(error),
+    );
+  }
 }
 
 function normalizeImportRequest(request: BackupPayload | ImportBackupRequest) {
@@ -480,9 +639,73 @@ function normalizeImportRequest(request: BackupPayload | ImportBackupRequest) {
     ? maybeRequest.mode === 'replace'
       ? 'replace'
       : 'merge'
-    : 'replace';
+    : 'merge';
 
-  return { payload, mode };
+  return {
+    payload,
+    mode,
+    replaceConfirmation: maybeRequest.payload
+      ? maybeRequest.replaceConfirmation
+      : undefined,
+  };
+}
+
+function assertUniqueBackupIds(payload: BackupPayload) {
+  const bookIds = new Set<string>();
+  const bookPaths = new Set<string>();
+  const chapterIds = new Set<string>();
+  const chapterBookIds = new Map<string, string>();
+
+  for (const book of payload.books) {
+    assertUniqueValue(bookIds, book.id, 'book id');
+    assertUniqueValue(bookPaths, book.path, 'book path');
+    const chapterFileNames = new Set<string>();
+
+    for (const chapter of book.chapters ?? []) {
+      assertUniqueValue(chapterIds, chapter.id, 'chapter id');
+      assertUniqueValue(
+        chapterFileNames,
+        chapter.fileName,
+        `chapter file name in book ${book.id}`,
+      );
+      if (chapter.bookId !== book.id) {
+        throw new BadRequestException(
+          `Backup chapter ${chapter.id} must belong to book ${book.id}`,
+        );
+      }
+      chapterBookIds.set(chapter.id, book.id);
+    }
+  }
+
+  const bookmarkIds = new Set<string>();
+  for (const bookmark of payload.bookmarks ?? []) {
+    assertUniqueValue(bookmarkIds, bookmark.id, 'bookmark id');
+    if (!bookIds.has(bookmark.bookId) || !chapterIds.has(bookmark.chapterId)) {
+      throw new BadRequestException(
+        `Backup bookmark ${bookmark.id} must reference a book and chapter in the backup`,
+      );
+    }
+    if (chapterBookIds.get(bookmark.chapterId) !== bookmark.bookId) {
+      throw new BadRequestException(
+        `Backup bookmark ${bookmark.id} chapter must belong to book ${bookmark.bookId}`,
+      );
+    }
+  }
+}
+
+function assertUniqueValue(seen: Set<string>, value: string, label: string) {
+  if (seen.has(value)) {
+    throw new BadRequestException(`Duplicate backup ${label}: ${value}`);
+  }
+  seen.add(value);
+}
+
+function stableImportedId(kind: string, ...parts: string[]) {
+  const digest = createHash('sha256')
+    .update([kind, ...parts].join('\0'))
+    .digest('hex')
+    .slice(0, 24);
+  return `imported_${kind}_${digest}`;
 }
 
 function buildChunkRows(

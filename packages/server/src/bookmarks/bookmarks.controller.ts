@@ -12,6 +12,14 @@ import type {
   CreateBookmarkRequest,
   UpdateBookmarkRequest,
 } from '@moxu/shared';
+import type { BookmarkQueryRequest } from '../validation/request-validation';
+import {
+  RequestValidationPipe,
+  validateBookmarkQuery,
+  validateCreateBookmarkRequest,
+  validateIdentifier,
+  validateUpdateBookmarkRequest,
+} from '../validation/request-validation';
 import { BookmarksService } from './bookmarks.service';
 
 @Controller('bookmarks')
@@ -20,24 +28,41 @@ export class BookmarksController {
 
   @Get()
   findAll(
-    @Query('bookId') bookId?: string,
-    @Query('chapterId') chapterId?: string,
+    @Query(new RequestValidationPipe(validateBookmarkQuery))
+    query: BookmarkQueryRequest,
   ) {
-    return this.bookmarksService.findAll({ bookId, chapterId });
+    return this.bookmarksService.findAll(query);
   }
 
   @Post()
-  create(@Body() request: CreateBookmarkRequest) {
+  create(
+    @Body(new RequestValidationPipe(validateCreateBookmarkRequest))
+    request: CreateBookmarkRequest,
+  ) {
     return this.bookmarksService.create(request);
   }
 
   @Put(':id')
-  update(@Param('id') id: string, @Body() request: UpdateBookmarkRequest) {
+  update(
+    @Param(
+      'id',
+      new RequestValidationPipe((value) => validateIdentifier(value)),
+    )
+    id: string,
+    @Body(new RequestValidationPipe(validateUpdateBookmarkRequest))
+    request: UpdateBookmarkRequest,
+  ) {
     return this.bookmarksService.update(id, request);
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string) {
+  remove(
+    @Param(
+      'id',
+      new RequestValidationPipe((value) => validateIdentifier(value)),
+    )
+    id: string,
+  ) {
     return this.bookmarksService.remove(id);
   }
 }

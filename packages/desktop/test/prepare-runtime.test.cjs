@@ -7,12 +7,21 @@ const {
   assertFileFingerprintUnchanged,
   createNativeRebuildOptions,
   fileFingerprint,
+  resolveInstalledElectronVersion,
   runtimeRoot,
   withFileFingerprintGuard,
 } = require("../scripts/prepare-runtime.cjs");
 const beforePack = require("../scripts/before-pack.cjs");
 const afterPack = require("../scripts/after-pack.cjs");
 const desktopPackage = require("../package.json");
+
+test("resolves an exact installed Electron version for native rebuilds", () => {
+  const installedElectron = require("electron/package.json").version;
+
+  assert.equal(resolveInstalledElectronVersion(), installedElectron);
+  assert.match(installedElectron, /^\d+\.\d+\.\d+/);
+  assert.equal(desktopPackage.devDependencies.electron, installedElectron);
+});
 
 test("limits native rebuild discovery to the isolated runtime", () => {
   const options = createNativeRebuildOptions("38.2.2", "darwin", "arm64");
@@ -123,6 +132,13 @@ test("afterPack rejects an incomplete desktop runtime", async () => {
     packager: { appInfo: { productFilename: "墨序" } },
   };
   const runtimeRoot = afterPack.packagedRuntimeRoot(context);
+  const sharedPackagePath = path.join(
+    runtimeRoot,
+    "node_modules",
+    "@moxu",
+    "shared",
+    "package.json",
+  );
   const requiredFiles = [
     path.join(runtimeRoot, "package.json"),
     path.join(
@@ -134,6 +150,15 @@ test("afterPack rejects an incomplete desktop runtime", async () => {
       "better_sqlite3.node",
     ),
     path.join(runtimeRoot, "packages", "server", "dist", "src", "main.js"),
+    sharedPackagePath,
+    path.join(
+      runtimeRoot,
+      "node_modules",
+      "@moxu",
+      "shared",
+      "dist",
+      "index.js",
+    ),
     path.join(runtimeRoot, "web", "packages", "web", "server.js"),
     path.join(runtimeRoot, "web", "node_modules", "next", "package.json"),
   ];
@@ -145,6 +170,13 @@ test("afterPack rejects an incomplete desktop runtime", async () => {
     }
 
     await assert.doesNotReject(() => afterPack(context));
+
+    fs.rmSync(sharedPackagePath);
+    await assert.rejects(
+      () => afterPack(context),
+      /runtime is incomplete.*shared.*package\.json/s,
+    );
+    fs.writeFileSync(sharedPackagePath, "fixture");
 
     fs.rmSync(requiredFiles.at(-1));
     await assert.rejects(() => afterPack(context), /runtime is incomplete.*next/s);

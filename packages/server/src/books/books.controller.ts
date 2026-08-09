@@ -1,13 +1,11 @@
+import { Body, Controller, Delete, Get, Param, Put } from '@nestjs/common';
+import type { UpdateBookRequest, UpdateProgressRequest } from '@moxu/shared';
 import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  Param,
-  ParseFloatPipe,
-  Put,
-} from '@nestjs/common';
-import type { UpdateBookRequest } from '@moxu/shared';
+  RequestValidationPipe,
+  validateIdentifier,
+  validateProgressRequest,
+  validateUpdateBookRequest,
+} from '../validation/request-validation';
 import { BooksService } from './books.service';
 
 @Controller('books')
@@ -30,7 +28,15 @@ export class BooksController {
   }
 
   @Put(':id')
-  updateBook(@Param('id') id: string, @Body() request: UpdateBookRequest) {
+  updateBook(
+    @Param(
+      'id',
+      new RequestValidationPipe((value) => validateIdentifier(value)),
+    )
+    id: string,
+    @Body(new RequestValidationPipe(validateUpdateBookRequest))
+    request: UpdateBookRequest,
+  ) {
     return this.booksService.updateBook(id, request);
   }
 
@@ -49,18 +55,27 @@ export class BooksController {
 
   @Put(':bookId/chapters/:chapterId/progress')
   updateProgress(
-    @Param('bookId') bookId: string,
-    @Param('chapterId') chapterId: string,
-    @Body('progress', ParseFloatPipe) progress: number,
-    @Body('scrollPosition') scrollPosition?: number,
-    @Body('readingSecondsDelta') readingSecondsDelta?: number,
+    @Param(
+      'bookId',
+      new RequestValidationPipe((value) => validateIdentifier(value, 'bookId')),
+    )
+    bookId: string,
+    @Param(
+      'chapterId',
+      new RequestValidationPipe((value) =>
+        validateIdentifier(value, 'chapterId'),
+      ),
+    )
+    chapterId: string,
+    @Body(new RequestValidationPipe(validateProgressRequest))
+    request: UpdateProgressRequest,
   ) {
     return this.booksService.updateProgress(
       bookId,
       chapterId,
-      progress,
-      scrollPosition,
-      readingSecondsDelta,
+      request.progress,
+      request.scrollPosition,
+      request.readingSecondsDelta,
     );
   }
 }

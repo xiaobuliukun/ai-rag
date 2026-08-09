@@ -75,7 +75,12 @@ export function SettingsView() {
   const [isSavingAI, setIsSavingAI] = React.useState(false);
   const [aiStatus, setAIStatus] = React.useState<string | null>(null);
   const [aiError, setAIError] = React.useState<string | null>(null);
-  const [brightnessClock, setBrightnessClock] = React.useState(() => new Date());
+  const [hasStoredApiKey, setHasStoredApiKey] = React.useState(false);
+  const [maskedApiKey, setMaskedApiKey] = React.useState<string | undefined>();
+  const [clearApiKey, setClearApiKey] = React.useState(false);
+  const [brightnessClock, setBrightnessClock] = React.useState(
+    () => new Date(),
+  );
 
   const effectiveBrightness = React.useMemo(
     () =>
@@ -96,7 +101,10 @@ export function SettingsView() {
       return;
     }
 
-    const timer = window.setInterval(() => setBrightnessClock(new Date()), 60000);
+    const timer = window.setInterval(
+      () => setBrightnessClock(new Date()),
+      60000,
+    );
     return () => window.clearInterval(timer);
   }, [autoBrightness]);
 
@@ -110,13 +118,16 @@ export function SettingsView() {
             mode: config.mode,
             baseUrl: config.baseUrl,
             model: config.model,
-            apiKey: config.apiKey,
+            apiKey: "",
             embeddingProvider: config.embeddingProvider,
             embeddingModel: config.embeddingModel,
             ragSourceCount: config.ragSourceCount,
             ragContextChars: config.ragContextChars,
             ragExcerptChars: config.ragExcerptChars,
           });
+          setHasStoredApiKey(config.hasApiKey);
+          setMaskedApiKey(config.maskedApiKey);
+          setClearApiKey(false);
         }
       })
       .catch(() => {
@@ -134,21 +145,31 @@ export function SettingsView() {
     setAIError(null);
 
     try {
-      const saved = await saveAIConfig(aiConfig);
+      const apiKey = aiConfig.apiKey?.trim();
+      const saved = await saveAIConfig({
+        ...aiConfig,
+        apiKey: clearApiKey ? undefined : apiKey || undefined,
+        clearApiKey,
+      });
       setAIConfig({
         mode: saved.mode,
         baseUrl: saved.baseUrl,
         model: saved.model,
-        apiKey: saved.apiKey,
+        apiKey: "",
         embeddingProvider: saved.embeddingProvider,
         embeddingModel: saved.embeddingModel,
         ragSourceCount: saved.ragSourceCount,
         ragContextChars: saved.ragContextChars,
         ragExcerptChars: saved.ragExcerptChars,
       });
+      setHasStoredApiKey(saved.hasApiKey);
+      setMaskedApiKey(saved.maskedApiKey);
+      setClearApiKey(false);
       setAIStatus(t("settings.aiSaved"));
     } catch (err) {
-      setAIError(err instanceof Error ? err.message : t("settings.aiSaveFailed"));
+      setAIError(
+        err instanceof Error ? err.message : t("settings.aiSaveFailed"),
+      );
     } finally {
       setIsSavingAI(false);
     }
@@ -203,7 +224,8 @@ export function SettingsView() {
                 onClick={() => setTheme(option.value)}
                 className={cn(
                   "flex h-20 items-center justify-center gap-3 rounded-md border bg-background px-4 font-medium transition-all hover:border-accent hover:text-accent",
-                  selected && "border-primary text-primary ring-2 ring-primary/20",
+                  selected &&
+                    "border-primary text-primary ring-2 ring-primary/20",
                 )}
               >
                 <Icon className="h-5 w-5" />
@@ -297,7 +319,9 @@ export function SettingsView() {
               max="108"
               step="1"
               value={pageBrightness}
-              onChange={(event) => setPageBrightness(Number(event.target.value))}
+              onChange={(event) =>
+                setPageBrightness(Number(event.target.value))
+              }
               className="w-full accent-primary"
             />
           </label>
@@ -341,7 +365,9 @@ export function SettingsView() {
 
           <label className="block">
             <div className="mb-2 flex items-center justify-between text-sm">
-              <span className="font-medium">{t("settings.autoSaveInterval")}</span>
+              <span className="font-medium">
+                {t("settings.autoSaveInterval")}
+              </span>
               <span className="text-muted-foreground">
                 {t("settings.secondsValue", {
                   seconds: autoSaveIntervalSeconds,
@@ -362,7 +388,9 @@ export function SettingsView() {
           </label>
 
           <label className="flex items-center justify-between gap-4 rounded-md border bg-background px-4 py-3 text-sm">
-            <span className="font-medium">{t("settings.smoothScrollRestore")}</span>
+            <span className="font-medium">
+              {t("settings.smoothScrollRestore")}
+            </span>
             <input
               type="checkbox"
               checked={smoothScrollRestore}
@@ -384,13 +412,15 @@ export function SettingsView() {
 
         <div
           className="reader-paper rounded-md border bg-background p-5 text-foreground"
-          style={{
-            fontSize,
-            lineHeight,
-            "--reader-warmth": `${colorTemperature / 100}`,
-            "--reader-brightness": `${effectiveBrightness / 100}`,
-            "--paper-texture-opacity": paperTexture ? "0.22" : "0",
-          } as React.CSSProperties}
+          style={
+            {
+              fontSize,
+              lineHeight,
+              "--reader-warmth": `${colorTemperature / 100}`,
+              "--reader-brightness": `${effectiveBrightness / 100}`,
+              "--paper-texture-opacity": paperTexture ? "0.22" : "0",
+            } as React.CSSProperties
+          }
         >
           <p className="font-semibold">{t("settings.preview")}</p>
           <p className="mt-2 text-muted-foreground">
@@ -449,7 +479,9 @@ export function SettingsView() {
           </label>
 
           <label className="block">
-            <div className="mb-2 text-sm font-medium">{t("settings.model")}</div>
+            <div className="mb-2 text-sm font-medium">
+              {t("settings.model")}
+            </div>
             <input
               value={aiConfig.model ?? ""}
               onChange={(event) => setAIConfig({ model: event.target.value })}
@@ -459,7 +491,7 @@ export function SettingsView() {
           </label>
         </div>
 
-        <label className="block">
+        <div className="block">
           <div className="mb-2 flex items-center gap-2 text-sm font-medium">
             <KeyRound className="h-4 w-4" />
             {t("settings.apiKey")}
@@ -467,11 +499,40 @@ export function SettingsView() {
           <input
             type="password"
             value={aiConfig.apiKey ?? ""}
-            onChange={(event) => setAIConfig({ apiKey: event.target.value })}
-            placeholder="sk-..."
+            onChange={(event) => {
+              setAIConfig({ apiKey: event.target.value });
+              if (event.target.value) {
+                setClearApiKey(false);
+              }
+            }}
+            placeholder={
+              hasStoredApiKey ? (maskedApiKey ?? "••••••••") : "sk-..."
+            }
+            disabled={clearApiKey}
             className="h-10 w-full rounded-md border bg-background px-3 text-sm outline-none transition-all focus:ring-2 focus:ring-primary/50"
           />
-        </label>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {hasStoredApiKey
+              ? t("settings.apiKeyRetainHint")
+              : t("settings.apiKeyMissingHint")}
+          </p>
+          {hasStoredApiKey && (
+            <label className="mt-3 flex items-center gap-2 text-sm text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={clearApiKey}
+                onChange={(event) => {
+                  setClearApiKey(event.target.checked);
+                  if (event.target.checked) {
+                    setAIConfig({ apiKey: "" });
+                  }
+                }}
+                className="h-4 w-4 accent-destructive"
+              />
+              {t("settings.clearApiKey")}
+            </label>
+          )}
+        </div>
 
         <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <div>
@@ -530,7 +591,9 @@ export function SettingsView() {
 
           <label className="block">
             <div className="mb-2 flex items-center justify-between text-sm">
-              <span className="font-medium">{t("settings.ragSourceCount")}</span>
+              <span className="font-medium">
+                {t("settings.ragSourceCount")}
+              </span>
               <span className="text-muted-foreground">
                 {aiConfig.ragSourceCount ?? 5}
               </span>
@@ -550,7 +613,9 @@ export function SettingsView() {
 
           <label className="block">
             <div className="mb-2 flex items-center justify-between text-sm">
-              <span className="font-medium">{t("settings.ragContextChars")}</span>
+              <span className="font-medium">
+                {t("settings.ragContextChars")}
+              </span>
               <span className="text-muted-foreground">
                 {formatChars(aiConfig.ragContextChars ?? 12000)}
               </span>
@@ -570,7 +635,9 @@ export function SettingsView() {
 
           <label className="block">
             <div className="mb-2 flex items-center justify-between text-sm">
-              <span className="font-medium">{t("settings.ragExcerptChars")}</span>
+              <span className="font-medium">
+                {t("settings.ragExcerptChars")}
+              </span>
               <span className="text-muted-foreground">
                 {aiConfig.ragExcerptChars ?? 520}
               </span>

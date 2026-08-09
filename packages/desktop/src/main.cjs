@@ -1,16 +1,30 @@
-const { app, BrowserWindow, Menu, Tray, nativeImage, shell, dialog } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  Menu,
+  Tray,
+  nativeImage,
+  shell,
+  dialog,
+  session,
+} = require("electron");
 const { autoUpdater } = require("electron-updater");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const net = require("node:net");
 const path = require("node:path");
 const {
+  configureSessionPermissions,
   createLocalCorsOrigins,
+  createSecureWebPreferences,
   createServerEnvironment,
   createWebEnvironment,
   findStandaloneServer,
+  isAllowedAppNavigation,
   loadOrCreateDesktopSecret,
+  normalizeExternalUrl,
   parsePort,
+  resolveUpdateConfiguration,
 } = require("./runtime.cjs");
 
 const WEB_PORT = parsePort(process.env.MOXU_WEB_PORT, 3000, "MOXU_WEB_PORT");
@@ -25,8 +39,17 @@ let serverProcess;
 let webProcess;
 let isQuitting = false;
 let servicesReady = false;
+let updateConfiguration = {
+  enabled: false,
+  source: "uninitialized",
+};
+let updateConfigurationError;
 
 app.setName("墨序");
+const configuredUserDataPath = process.env.MOXU_USER_DATA_DIR?.trim();
+if (configuredUserDataPath) {
+  app.setPath("userData", path.resolve(configuredUserDataPath));
+}
 app.setLoginItemSettings({
   openAtLogin: process.env.MOXU_OPEN_AT_LOGIN === "true",
 });
@@ -41,6 +64,7 @@ app.on("second-instance", () => {
 });
 
 app.whenReady().then(async () => {
+  configureSessionPermissions(session.defaultSession);
   configureAutoUpdater();
   await startServices();
   createTray();
@@ -73,13 +97,10 @@ function createWindow() {
     title: "墨序",
     backgroundColor: "#f1ece4",
     show: false,
-    webPreferences: {
-      preload: path.join(__dirname, "preload.cjs"),
-      additionalArguments: [`--moxu-api-base-url=${API_BASE_URL}`],
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false,
-    },
+    webPreferences: createSecureWebPreferences({
+      preloadPath: path.join(__dirname, "preload.cjs"),
+      apiBaseUrl: API_BASE_URL,
+    }),
   });
 
   mainWindow.once("ready-to-show", () => {
@@ -95,8 +116,18 @@ function createWindow() {
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
+    openExternalUrl(url);
     return { action: "deny" };
+  });
+
+  mainWindow.webContents.on("will-navigate", (event, legacyUrl) => {
+    const targetUrl = event.url || legacyUrl;
+    if (isAllowedAppNavigation(targetUrl, WEB_URL)) {
+      return;
+    }
+
+    event.preventDefault();
+    openExternalUrl(targetUrl);
   });
 
   Menu.setApplicationMenu(
@@ -500,12 +531,35 @@ async function waitForHttpService(
 
 function configureAutoUpdater() {
   autoUpdater.autoDownload = true;
-  if (process.env.UPDATE_URL) {
-    autoUpdater.setFeedURL({
-      provider: "generic",
-      url: process.env.UPDATE_URL,
+  autoUpdater.disableWebInstaller = true;
+
+  try {
+    updateConfiguration = resolveUpdateConfiguration({
+      isPackaged: app.isPackaged,
+      baseEnvironment: process.env,
+      resourcesPath: process.resourcesPath,
     });
+    updateConfigurationError = undefined;
+
+    if (updateConfiguration.feed) {
+      autoUpdater.setFeedURL(updateConfiguration.feed);
+    } else if (updateConfiguration.channel) {
+      autoUpdater.channel = updateConfiguration.channel;
+      autoUpdater.allowDowngrade = false;
+    }
+  } catch (error) {
+    updateConfiguration = {
+      enabled: false,
+      source: "invalid",
+    };
+    updateConfigurationError =
+      error instanceof Error ? error.message : String(error);
+    console.error("[updater] configuration rejected", updateConfigurationError);
   }
+
+  autoUpdater.on("error", (error) => {
+    console.error("[updater] error", error);
+  });
   autoUpdater.on("update-downloaded", () => {
     dialog
       .showMessageBox({
@@ -526,7 +580,7 @@ function configureAutoUpdater() {
 }
 
 async function checkForUpdatesIfConfigured() {
-  if (!process.env.UPDATE_URL || !app.isPackaged) {
+  if (!updateConfiguration.enabled || !app.isPackaged) {
     return;
   }
 
@@ -538,11 +592,24 @@ async function checkForUpdatesIfConfigured() {
 }
 
 async function checkForUpdatesManually() {
-  if (!process.env.UPDATE_URL) {
+  if (!app.isPackaged) {
     await dialog.showMessageBox({
       type: "info",
-      message: "尚未配置更新地址",
-      detail: "设置 UPDATE_URL 后，打包版本会使用通用更新源检查新版本。",
+      message: "开发模式不检查更新",
+      detail: "自动更新仅在打包版本中启用。",
+    });
+    return;
+  }
+
+  if (!updateConfiguration.enabled) {
+    await dialog.showMessageBox({
+      type: updateConfigurationError ? "error" : "info",
+      message: updateConfigurationError
+        ? "更新配置无效"
+        : "尚未配置更新来源",
+      detail:
+        updateConfigurationError ||
+        "打包时配置 publish metadata，或设置安全的 UPDATE_URL 后即可检查更新。",
     });
     return;
   }
@@ -556,6 +623,18 @@ async function checkForUpdatesManually() {
       detail: error instanceof Error ? error.message : String(error),
     });
   }
+}
+
+function openExternalUrl(url) {
+  const externalUrl = normalizeExternalUrl(url);
+  if (!externalUrl) {
+    console.warn("[desktop] blocked external URL with a disallowed protocol");
+    return;
+  }
+
+  void shell.openExternal(externalUrl).catch((error) => {
+    console.error("[desktop] unable to open external URL", error);
+  });
 }
 
 function showServiceError(name, code, signal) {

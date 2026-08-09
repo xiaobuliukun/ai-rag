@@ -111,12 +111,12 @@ export interface UpdateBookmarkRequest {
   position?: number;
 }
 
-export type SearchResultType = 'all' | 'book' | 'chapter' | 'content';
-export type AiEmbeddingProvider = 'local' | 'openai-compatible';
+export type SearchResultType = "all" | "book" | "chapter" | "content";
+export type AiEmbeddingProvider = "local" | "openai-compatible";
 
 export interface SearchResult {
   id: string;
-  type: 'book' | 'chapter' | 'content';
+  type: "book" | "chapter" | "content";
   title: string;
   content: string;
   highlightedContent?: string;
@@ -139,7 +139,7 @@ export interface SearchIndexStatus {
 }
 
 export interface AiRuntimeConfig {
-  mode: 'local' | 'openai-compatible';
+  mode: "local" | "openai-compatible";
   baseUrl?: string;
   model?: string;
   apiKey?: string;
@@ -150,7 +150,20 @@ export interface AiRuntimeConfig {
   ragExcerptChars?: number;
 }
 
-export interface PersistedAiConfig extends AiRuntimeConfig {
+export interface AiConfigUpdateRequest extends AiRuntimeConfig {
+  /** Explicitly remove the server-side API key. Empty or omitted apiKey keeps it. */
+  clearApiKey?: boolean;
+}
+
+export interface PersistedAiConfig extends Omit<AiRuntimeConfig, "apiKey"> {
+  id: string;
+  hasApiKey: boolean;
+  maskedApiKey?: string;
+  updatedAt?: string | Date;
+}
+
+/** Backup-only shape. apiKey is accepted for legacy imports but never exported. */
+export interface BackupAiConfig extends AiRuntimeConfig {
   id: string;
   updatedAt?: string | Date;
 }
@@ -164,7 +177,7 @@ export interface AiContext {
 }
 
 export interface AiChatHistoryMessage {
-  role: 'user' | 'assistant';
+  role: "user" | "assistant";
   content: string;
 }
 
@@ -188,32 +201,32 @@ export interface AiSource {
 export interface AiChatResponse {
   answer: string;
   sources: AiSource[];
-  mode: 'local-extractive' | 'openai-compatible';
+  mode: "local-extractive" | "openai-compatible";
   model?: string;
   notice?: string;
 }
 
 export type AiChatStreamEvent =
   | {
-      type: 'meta';
+      type: "meta";
       sources: AiSource[];
-      mode: AiChatResponse['mode'];
+      mode: AiChatResponse["mode"];
       model?: string;
     }
   | {
-      type: 'delta';
+      type: "delta";
       delta: string;
     }
   | {
-      type: 'notice';
+      type: "notice";
       notice: string;
     }
   | {
-      type: 'done';
+      type: "done";
       response: AiChatResponse;
     }
   | {
-      type: 'error';
+      type: "error";
       message: string;
     };
 
@@ -234,7 +247,7 @@ export interface BackupPayload {
     }
   >;
   bookmarks: Bookmark[];
-  aiConfig?: PersistedAiConfig | null;
+  aiConfig?: BackupAiConfig | null;
   clientPreferences?: ClientPreferencesBackup | null;
 }
 
@@ -243,15 +256,20 @@ export interface ClientPreferencesBackup {
   theme?: string | null;
 }
 
-export type ImportBackupMode = 'merge' | 'replace';
+export type ImportBackupMode = "merge" | "replace";
+
+export const REPLACE_BACKUP_CONFIRMATION = "replace-current-library" as const;
+export type ReplaceBackupConfirmation = typeof REPLACE_BACKUP_CONFIRMATION;
 
 export interface ImportBackupRequest {
   payload: BackupPayload;
   mode?: ImportBackupMode;
+  replaceConfirmation?: ReplaceBackupConfirmation;
 }
 
 export interface ImportBackupResponse {
   success: boolean;
+  indexPending: boolean;
   message: string;
   booksImported: number;
   chaptersImported: number;
@@ -259,12 +277,12 @@ export interface ImportBackupResponse {
 }
 
 export type ScanJobPhase =
-  | 'queued'
-  | 'scanning'
-  | 'indexing'
-  | 'cancelled'
-  | 'completed'
-  | 'failed';
+  | "queued"
+  | "scanning"
+  | "indexing"
+  | "cancelled"
+  | "completed"
+  | "failed";
 
 export interface ScanJobStatus {
   id: string;

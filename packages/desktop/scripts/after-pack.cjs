@@ -18,6 +18,21 @@ module.exports = async function afterPack(context) {
       "better_sqlite3.node",
     ),
     path.join(runtimeRoot, "packages", "server", "dist", "src", "main.js"),
+    path.join(
+      runtimeRoot,
+      "node_modules",
+      "@moxu",
+      "shared",
+      "package.json",
+    ),
+    path.join(
+      runtimeRoot,
+      "node_modules",
+      "@moxu",
+      "shared",
+      "dist",
+      "index.js",
+    ),
     path.join(runtimeRoot, "web", "node_modules", "next", "package.json"),
   ];
 

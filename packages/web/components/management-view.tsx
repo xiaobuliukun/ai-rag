@@ -51,6 +51,10 @@ import {
   sanitizeStoredPreferences,
 } from "@/lib/client-preferences";
 import { buildBookmarkReaderHref } from "@/lib/reader-scroll";
+import {
+  ReplaceBackupPreparationError,
+  runBackupImport,
+} from "@/lib/backup-import";
 
 const LIBRARY_REFRESH_EVENT = "library:refresh";
 const MAX_COVER_IMAGE_SIZE = 1_500_000;
@@ -268,21 +272,11 @@ export function ManagementView() {
     setError(null);
 
     try {
-      const payload = {
-        ...(await exportBackup()),
-        clientPreferences: readClientPreferences(),
-      } satisfies BackupPayload;
-      const blob = new Blob([JSON.stringify(payload, null, 2)], {
-        type: "application/json",
-      });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `moxu-backup-${new Date()
-        .toISOString()
-        .slice(0, 10)}.json`;
-      link.click();
-      URL.revokeObjectURL(url);
+      const payload = await createCurrentBackup();
+      downloadBackupPayload(
+        payload,
+        `moxu-backup-${new Date().toISOString().slice(0, 10)}.json`,
+      );
       setStatus(t("management.exported"));
     } catch (err) {
       setError(err instanceof Error ? err.message : t("management.exportFailed"));
@@ -308,13 +302,40 @@ export function ManagementView() {
           parsedPayload.clientPreferences,
         ),
       } satisfies BackupPayload;
-      const result = await importBackup(payload, importMode);
-      applyClientPreferences(payload.clientPreferences, setTheme);
-      setStatus(result.message);
+      const outcome = await runBackupImport({
+        mode: importMode,
+        payload,
+        confirmInitialReplace: () =>
+          window.confirm(t("management.importReplaceWarning")),
+        createRecoveryBackup: createCurrentBackup,
+        downloadRecoveryBackup: (recoveryPayload) => {
+          downloadBackupPayload(
+            recoveryPayload,
+            `moxu-before-replace-${formatBackupTimestamp(new Date())}.json`,
+          );
+          setStatus(t("management.importReplaceRecoveryDownloaded"));
+        },
+        confirmFinalReplace: () =>
+          window.confirm(t("management.importReplaceFinalConfirm")),
+        importPayload: importBackup,
+        applyImportedPayload: (importedPayload) =>
+          applyClientPreferences(importedPayload.clientPreferences, setTheme),
+      });
+      if (outcome.status === "cancelled") {
+        return;
+      }
+
+      setStatus(outcome.result.message);
       setSelectedBookId("");
       await refreshLibrary();
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("management.importFailed"));
+      setError(
+        err instanceof ReplaceBackupPreparationError
+          ? t("management.importReplacePreBackupFailed")
+          : err instanceof Error
+            ? err.message
+            : t("management.importFailed"),
+      );
     } finally {
       setIsImporting(false);
     }
@@ -393,6 +414,7 @@ export function ManagementView() {
               type="file"
               accept="application/json,.json"
               onChange={handleImport}
+              disabled={isImporting}
               className="hidden"
             />
           </label>
@@ -879,6 +901,33 @@ function readClientPreferences(): ClientPreferencesBackup {
       theme: localStorage.getItem("theme"),
     }) ?? {}
   );
+}
+
+async function createCurrentBackup(): Promise<BackupPayload> {
+  return {
+    ...(await exportBackup()),
+    clientPreferences: readClientPreferences(),
+  };
+}
+
+function downloadBackupPayload(payload: BackupPayload, fileName: string) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+
+  try {
+    link.click();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function formatBackupTimestamp(date: Date) {
+  return date.toISOString().replace(/[:.]/g, "-");
 }
 
 function applyClientPreferences(

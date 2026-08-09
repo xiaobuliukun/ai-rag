@@ -1,0 +1,20 @@
+{
+  "reviewedAt": "2026-08-09",
+  "advisories": {
+    "1119441": {
+      "package": "uuid",
+      "severity": "moderate",
+      "reason": "Transitive Expo xcode tooling only calls uuid.v4(); the vulnerable external-buffer paths are not used. Recheck when Expo updates xcode."
+    },
+    "1138808": {
+      "package": "image-size",
+      "severity": "high",
+      "reason": "Build-time Metro asset parser issue with no patched upstream release. CI only processes reviewed repository assets."
+    },
+    "1138809": {
+      "package": "image-size",
+      "severity": "high",
+      "reason": "Build-time Metro asset parser issue with no patched upstream release. CI only processes reviewed repository assets."
+    }
+  }
+}

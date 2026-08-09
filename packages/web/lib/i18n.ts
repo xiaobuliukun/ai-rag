@@ -143,6 +143,9 @@ export const dictionaries = {
       baseUrl: "Base URL",
       model: "模型",
       apiKey: "API Key",
+      apiKeyRetainHint: "已安全保存在服务端；留空会保留现有密钥。",
+      apiKeyMissingHint: "尚未在服务端保存 API Key。",
+      clearApiKey: "清除服务端已保存的 API Key",
       embeddingProvider: "向量方式",
       localEmbedding: "本地",
       openaiEmbedding: "兼容接口",
@@ -210,6 +213,12 @@ export const dictionaries = {
       importReplace: "替换",
       importMergeHint: "保留现有数据，按书籍路径和章节文件名更新重复内容",
       importReplaceHint: "清空现有数据后恢复备份",
+      importReplaceWarning:
+        "替换导入会清空当前书库、阅读进度和书签。继续前将自动下载一份当前数据的恢复备份。是否继续？",
+      importReplaceRecoveryDownloaded: "当前数据的恢复备份已下载。",
+      importReplaceFinalConfirm:
+        "恢复备份已下载。确定立即清空当前书库并导入所选备份吗？此操作不可撤销。",
+      importReplacePreBackupFailed: "无法创建替换前恢复备份，已取消导入",
       importFailed: "导入备份失败",
       rescanKnown: "重扫已知书籍",
       rescanningKnown: "重扫中",
@@ -259,13 +268,14 @@ export const dictionaries = {
       collection: "Collection",
       continueReading: "Continue reading",
       continue: "Continue",
-      scanThenContinue: "After scanning a book, your latest read will appear here.",
+      scanThenContinue:
+        "After scanning a book, your latest read will appear here.",
       bookCount: "{count} books",
       chapterCount: "{count} chapters",
       completed: "Done {completed}/{total}",
       reading: "Read {time}",
       active: "Active {active}/{total}",
-      searchingFor: "Search \"{query}\"",
+      searchingFor: 'Search "{query}"',
       queued: "Queued",
       indexing: "Indexing",
       cancelled: "Cancelled",
@@ -368,13 +378,18 @@ export const dictionaries = {
       off: "Off",
       paperTexture: "Paper texture",
       preview: "Preview",
-      previewText: "Dense notes stay readable with steady spacing and a calm line rhythm.",
+      previewText:
+        "Dense notes stay readable with steady spacing and a calm line rhythm.",
       ai: "AI",
       local: "Local",
       openaiCompatible: "OpenAI-compatible",
       baseUrl: "Base URL",
       model: "Model",
       apiKey: "API Key",
+      apiKeyRetainHint:
+        "Stored securely on the server. Leave blank to keep the current key.",
+      apiKeyMissingHint: "No API key is currently stored on the server.",
+      clearApiKey: "Remove the API key stored on the server",
       embeddingProvider: "Embeddings",
       localEmbedding: "Local",
       openaiEmbedding: "Compatible",
@@ -443,6 +458,14 @@ export const dictionaries = {
       importMergeHint:
         "Keep current data and update duplicate books or chapters by path",
       importReplaceHint: "Clear current data before restoring the backup",
+      importReplaceWarning:
+        "Replace import clears the current library, reading progress, and bookmarks. A recovery backup will be downloaded first. Continue?",
+      importReplaceRecoveryDownloaded:
+        "A recovery backup of the current library has been downloaded.",
+      importReplaceFinalConfirm:
+        "The recovery backup has been downloaded. Clear the current library and import the selected backup now? This cannot be undone.",
+      importReplacePreBackupFailed:
+        "Could not create the pre-replace recovery backup. Import was cancelled.",
       importFailed: "Failed to import backup",
       rescanKnown: "Rescan known books",
       rescanningKnown: "Rescanning",
@@ -471,9 +494,7 @@ export type Locale = keyof typeof dictionaries;
 export type Dictionary = (typeof dictionaries)["zh-CN"];
 
 type NestedKey<T> = {
-  [K in keyof T & string]: T[K] extends string
-    ? K
-    : `${K}.${NestedKey<T[K]>}`;
+  [K in keyof T & string]: T[K] extends string ? K : `${K}.${NestedKey<T[K]>}`;
 }[keyof T & string];
 
 export type TranslationKey = NestedKey<Dictionary>;

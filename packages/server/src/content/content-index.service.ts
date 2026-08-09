@@ -119,6 +119,7 @@ type PreparedVectorRow = {
 
 type PreparedBookContent = {
   bookId: string;
+  indexRevision: number;
   chunks: IndexableChunk[];
   ftsRows: PreparedFtsRow[];
 };
@@ -279,9 +280,10 @@ export class ContentIndexService {
       );
       throwIfAborted(signal);
 
-      await this.prisma.$transaction((tx) =>
-        this.writePreparedBookIndex(tx, prepared, true),
-      );
+      await this.prisma.$transaction(async (tx) => {
+        await this.writePreparedBookIndex(tx, prepared, true);
+        await this.clearBookIndexPending(tx, prepared);
+      });
     } catch (error) {
       if (!(error instanceof RemoteEmbeddingError) && !signal?.aborted) {
         throw error;
@@ -297,6 +299,12 @@ export class ContentIndexService {
   private async prepareBookContent(
     bookId: string,
   ): Promise<PreparedBookContent> {
+    const book = await this.prisma.book.findUnique({
+      where: { id: bookId },
+      select: {
+        indexRevision: true,
+      },
+    });
     const chunks = await this.prisma.chapterChunk.findMany({
       where: {
         chapter: {
@@ -324,6 +332,7 @@ export class ContentIndexService {
 
     return {
       bookId,
+      indexRevision: book?.indexRevision ?? 0,
       chunks,
       ftsRows: chunks.map((chunk) => ({
         chunkId: chunk.id,
@@ -354,6 +363,7 @@ export class ContentIndexService {
 
     return {
       bookId: preparedContent.bookId,
+      indexRevision: preparedContent.indexRevision,
       ftsRows: preparedContent.ftsRows,
       vectorRows,
       embeddingDimensions,
@@ -515,8 +525,23 @@ export class ContentIndexService {
     if (!this.indexReadyPromise) {
       const generation = this.indexGeneration;
       const readinessCheck = this.enqueueIndexOperation(async () => {
-        const state = await this.getFtsIndexState();
-        if (!this.isFtsIndexConsistent(state)) {
+        const [state, pendingBooks] = await Promise.all([
+          this.getFtsIndexState(),
+          this.prisma.book.count({
+            where: {
+              indexPending: true,
+            },
+          }),
+        ]);
+        if (pendingBooks > 0) {
+          try {
+            await this.rebuildIndexUnsafe();
+          } catch (error) {
+            if (!(error instanceof RemoteEmbeddingError)) {
+              throw error;
+            }
+          }
+        } else if (!this.isFtsIndexConsistent(state)) {
           await this.rebuildFtsIndexUnsafe();
         }
         if (generation === this.indexGeneration) {
@@ -597,7 +622,24 @@ export class ContentIndexService {
 
       for (const prepared of preparedBooks) {
         await this.writePreparedBookIndex(tx, prepared, false);
+        await this.clearBookIndexPending(tx, prepared);
       }
+    });
+  }
+
+  private clearBookIndexPending(
+    tx: Prisma.TransactionClient,
+    prepared: Pick<PreparedBookContent, 'bookId' | 'indexRevision'>,
+  ) {
+    return tx.book.updateMany({
+      where: {
+        id: prepared.bookId,
+        indexPending: true,
+        indexRevision: prepared.indexRevision,
+      },
+      data: {
+        indexPending: false,
+      },
     });
   }
 

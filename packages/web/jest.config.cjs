@@ -15,5 +15,6 @@ module.exports = {
     '^@/(.*)$': '<rootDir>/$1',
     '^@moxu/shared$': '<rootDir>/../shared/src',
   },
+  modulePathIgnorePatterns: ['<rootDir>/.next/'],
   watchman: false,
 };

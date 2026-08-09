@@ -22,12 +22,17 @@
     "desktop:dist": "npm run build && npm run dist -w packages/desktop",
     "desktop:dist:mac": "npm run build && npm run dist:mac -w packages/desktop",
     "desktop:dist:mac:signed": "npm run build && npm run dist:mac:signed -w packages/desktop",
+    "desktop:dist:win": "npm run build:server && npm run build:web && npm run dist:win -w packages/desktop",
+    "desktop:dist:linux": "npm run build:server && npm run build:web && npm run dist:linux -w packages/desktop",
     "lint": "npm run lint --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
-    "test:unit": "npm run test -w packages/desktop && npm run test -w packages/server -- --runInBand && npm run test -w packages/web -- --runInBand",
+    "test:release": "node --test scripts/*.test.mjs",
+    "test:unit": "npm run test:release && npm run test -w packages/desktop && npm run test -w packages/server -- --runInBand && npm run test -w packages/web -- --runInBand && npm run test -w packages/app",
     "test:desktop-runtime": "npm run prepare:runtime -w packages/desktop",
-    "test:all": "npm run lint && npm run typecheck && npm run test:unit && npm run test:e2e -w packages/server -- --runInBand && npm run build && npm run test:desktop-runtime && npm run test:smoke -w packages/web && npm run test:large",
+    "audit:policy": "node scripts/audit-policy.mjs",
+    "release:check-version": "node scripts/check-release-version.mjs",
+    "test:all": "npm run lint && npm run typecheck && npm run test:unit && npm run test:e2e -w packages/server -- --runInBand && npm run doctor -w packages/app && npm run build && npm run test:desktop-runtime && npm run test:smoke -w packages/web && npm run test:large",
     "verify": "npm run test:all",
     "pretest:large": "npm run build:server",
     "test:large": "node scripts/large-library-smoke.mjs",
@@ -38,5 +43,8 @@
   },
   "dependencies": {
     "rxjs": "^7.8.2"
+  },
+  "devDependencies": {
+    "js-yaml": "5.2.3"
   }
 }

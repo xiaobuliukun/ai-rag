@@ -1,11 +1,9 @@
+import { Controller, Post, Body, Get, Param } from '@nestjs/common';
 import {
-  Controller,
-  Post,
-  Body,
-  BadRequestException,
-  Get,
-  Param,
-} from '@nestjs/common';
+  RequestValidationPipe,
+  validateIdentifier,
+  validateScanRequest,
+} from '../validation/request-validation';
 import { ScanService } from './scan.service';
 import { ScanJobsService } from './scan-jobs.service';
 
@@ -17,11 +15,13 @@ export class ScanController {
   ) {}
 
   @Post()
-  async scan(@Body('path') path: string) {
-    if (!path) {
-      throw new BadRequestException('Path is required');
-    }
-    return this.scanService.scanDirectory(path);
+  async scan(
+    @Body(new RequestValidationPipe(validateScanRequest))
+    request: {
+      path: string;
+    },
+  ) {
+    return this.scanService.scanDirectory(request.path);
   }
 
   @Post('rescan-known')
@@ -30,11 +30,13 @@ export class ScanController {
   }
 
   @Post('jobs')
-  startScanJob(@Body('path') path: string) {
-    if (!path) {
-      throw new BadRequestException('Path is required');
-    }
-    return { job: this.scanJobsService.startScan(path) };
+  startScanJob(
+    @Body(new RequestValidationPipe(validateScanRequest))
+    request: {
+      path: string;
+    },
+  ) {
+    return { job: this.scanJobsService.startScan(request.path) };
   }
 
   @Post('rescan-known/jobs')
@@ -43,12 +45,24 @@ export class ScanController {
   }
 
   @Get('jobs/:id')
-  getScanJob(@Param('id') id: string) {
+  getScanJob(
+    @Param(
+      'id',
+      new RequestValidationPipe((value) => validateIdentifier(value)),
+    )
+    id: string,
+  ) {
     return { job: this.scanJobsService.getJob(id) };
   }
 
   @Post('jobs/:id/cancel')
-  cancelScanJob(@Param('id') id: string) {
+  cancelScanJob(
+    @Param(
+      'id',
+      new RequestValidationPipe((value) => validateIdentifier(value)),
+    )
+    id: string,
+  ) {
     return { job: this.scanJobsService.cancelJob(id) };
   }
 }

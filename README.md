@@ -115,6 +115,8 @@ npm run test -w packages/desktop
 npm run desktop:pack
 npm run desktop:dist:mac
 npm run desktop:dist:mac:signed
+npm run desktop:dist:win
+npm run desktop:dist:linux
 
 # 大书库烟测
 npm run test:large
@@ -287,7 +289,7 @@ packages/app/src/
 
 ## 桌面端
 
-桌面端位于 `packages/desktop`。Electron 壳会先应用 Prisma migration，再启动本地 API 和 Next standalone Web 服务，默认在窗口中打开 `http://127.0.0.1:3000`。可用 `MOXU_WEB_PORT` 和 `MOXU_API_PORT` 修改端口；两者必须不同且启动前会检查占用，自定义 Web 端口会自动加入本地 CORS 来源。
+桌面端位于 `packages/desktop`。Electron 壳会先应用 Prisma migration，再启动本地 API 和 Next standalone Web 服务，默认在窗口中打开 `http://127.0.0.1:3000`。可用 `MOXU_WEB_PORT` 和 `MOXU_API_PORT` 修改端口；两者必须不同且启动前会检查占用，自定义 Web 端口会自动加入本地 CORS 来源。自动化 smoke 可用绝对路径 `MOXU_USER_DATA_DIR` 隔离数据库、扫描任务和本地密钥。
 
 常用产物：
 
@@ -297,7 +299,7 @@ packages/app/src/
 
 `desktop:dist:mac` 默认跳过本机证书自动发现，用于稳定生成本地未签名 `.dmg` / `.zip`。正式签名发布使用 `desktop:dist:mac:signed`，由 electron-builder 读取平台环境变量完成，例如 macOS 可使用 `CSC_LINK`、`CSC_KEY_PASSWORD` 和 Apple notarization 相关变量。
 
-打包版本支持通过 `UPDATE_URL` 配置 generic provider 自动更新。
+正式打包版本默认从 `xiaobuliukun/ai-rag` 的 GitHub Release 检查更新，也可以通过安全的 `UPDATE_URL` 和 `UPDATE_CHANNEL` 覆盖为自建更新源。多平台发布、签名凭据和产物校验流程见 `docs/releasing.md`。
 
 ## 备份与恢复
 

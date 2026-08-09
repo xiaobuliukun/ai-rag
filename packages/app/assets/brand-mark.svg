@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="墨序品牌标记">
+  <rect x="144" y="144" width="736" height="736" rx="196" fill="#2f6f46" />
+  <path
+    d="M262 344c93-35 181-11 250 60v332c-67-58-151-80-250-48V344Z"
+    fill="#fffaf2"
+  />
+  <path
+    d="M762 344c-93-35-181-11-250 60v332c67-58 151-80 250-48V344Z"
+    fill="#fffaf2"
+  />
+  <path d="M512 404v332" stroke="#dfd2c2" stroke-width="22" stroke-linecap="round" />
+  <path
+    d="M298 636c82-18 151 1 214 54 63-53 132-72 214-54"
+    fill="none"
+    stroke="#c96e33"
+    stroke-width="30"
+    stroke-linecap="round"
+  />
+  <path
+    d="M706 250l18 48 48 18-48 18-18 48-18-48-48-18 48-18 18-48Z"
+    fill="#c96e33"
+  />
+</svg>

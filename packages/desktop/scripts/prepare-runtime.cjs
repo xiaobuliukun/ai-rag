@@ -8,9 +8,8 @@ const projectRoot = path.resolve(desktopRoot, "../..");
 const runtimeRoot = path.join(projectRoot, ".moxu", "desktop-runtime");
 
 async function prepareRuntime(options = {}) {
-  const desktopPackage = readJson(path.join(desktopRoot, "package.json"));
   const electronVersion =
-    options.electronVersion || desktopPackage.devDependencies.electron;
+    options.electronVersion || resolveInstalledElectronVersion();
   const targetPlatform = options.platform || process.platform;
   const targetArch = options.arch || process.arch;
   const hostNativeBinary = path.join(
@@ -34,6 +33,7 @@ async function prepareRuntime(options = {}) {
       copyProductionDependencies();
       copyPrismaClient();
       copyServerOutput();
+      copySharedOutput();
       copyWebStandaloneOutput();
       writeRuntimePackage(electronVersion, targetPlatform, targetArch);
       await rebuildNativeDependencies(electronVersion, targetPlatform, targetArch);
@@ -47,6 +47,17 @@ async function prepareRuntime(options = {}) {
       return runtimeRoot;
     },
   );
+}
+
+function resolveInstalledElectronVersion() {
+  const electronPackage = require.resolve("electron/package.json", {
+    paths: [desktopRoot],
+  });
+  const version = readJson(electronPackage).version;
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
+    throw new Error(`Installed Electron version is invalid: ${version}`);
+  }
+  return version;
 }
 
 function assertNativeTarget(targetPlatform, targetArch) {
@@ -63,6 +74,7 @@ function assertBuildOutputs() {
     path.join(projectRoot, "packages", "server", "dist", "src", "main.js"),
     path.join(projectRoot, "packages", "server", "prisma", "schema.prisma"),
     path.join(projectRoot, "packages", "server", "prisma.config.ts"),
+    path.join(projectRoot, "packages", "shared", "dist", "index.js"),
     path.join(projectRoot, "packages", "web", ".next", "standalone"),
     path.join(projectRoot, "packages", "web", ".next", "static"),
   ];
@@ -165,6 +177,25 @@ function copyServerOutput() {
   );
 }
 
+function copySharedOutput() {
+  const sharedRoot = path.join(projectRoot, "packages", "shared");
+  const destination = path.join(
+    runtimeRoot,
+    "node_modules",
+    "@moxu",
+    "shared",
+  );
+
+  fs.mkdirSync(destination, { recursive: true });
+  fs.cpSync(path.join(sharedRoot, "dist"), path.join(destination, "dist"), {
+    recursive: true,
+  });
+  fs.copyFileSync(
+    path.join(sharedRoot, "package.json"),
+    path.join(destination, "package.json"),
+  );
+}
+
 function copyWebStandaloneOutput() {
   const webRoot = path.join(projectRoot, "packages", "web");
   const standaloneSource = path.join(webRoot, ".next", "standalone");
@@ -207,11 +238,15 @@ function writeRuntimePackage(electronVersion, platform, arch) {
   const betterSqlitePackage = readJson(
     path.join(runtimeRoot, "node_modules", "better-sqlite3", "package.json"),
   );
+  const sharedPackage = readJson(
+    path.join(runtimeRoot, "node_modules", "@moxu", "shared", "package.json"),
+  );
   const payload = {
     name: "moxu-desktop-runtime",
     private: true,
     version: "0.0.0",
     dependencies: {
+      "@moxu/shared": sharedPackage.version,
       "better-sqlite3": betterSqlitePackage.version,
     },
     moxuRuntime: {
@@ -292,6 +327,9 @@ function validateRuntime(electronVersion, platform, arch) {
   );
 
   const validationScript = [
+    `const shared = require(${JSON.stringify(path.join(runtimeRoot, "node_modules", "@moxu", "shared"))});`,
+    `if (shared.REPLACE_BACKUP_CONFIRMATION !== "replace-current-library") throw new Error("Shared runtime package is invalid");`,
+    `require(${JSON.stringify(path.join(serverRuntimeRoot, "dist", "src", "validation", "request-validation.js"))});`,
     `const Database = require(${JSON.stringify(path.join(runtimeRoot, "node_modules", "better-sqlite3"))});`,
     `const database = new Database(${JSON.stringify(validationDatabase)});`,
     `const row = database.prepare("SELECT COUNT(*) AS count FROM _prisma_migrations").get();`,
@@ -463,6 +501,7 @@ module.exports = {
   createNativeRebuildOptions,
   fileFingerprint,
   prepareRuntime,
+  resolveInstalledElectronVersion,
   runtimeRoot,
   withFileFingerprintGuard,
 };

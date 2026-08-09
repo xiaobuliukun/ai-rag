@@ -91,8 +91,21 @@ describe('ContentIndexService index lifecycle', () => {
         metadata: string;
       }>;
     };
+    type BookUpdateManyArgs = {
+      where: {
+        id: string;
+        indexPending: boolean;
+        indexRevision: number;
+      };
+      data: {
+        indexPending: boolean;
+      };
+    };
     const tx = {
       $executeRawUnsafe: jest.fn(),
+      book: {
+        updateMany: jest.fn<unknown, [BookUpdateManyArgs]>(),
+      },
       vectorData: {
         deleteMany: jest.fn(),
         createMany: jest.fn<unknown, [VectorCreateManyArgs]>(),
@@ -105,6 +118,8 @@ describe('ContentIndexService index lifecycle', () => {
       ),
       book: {
         findMany: jest.fn(),
+        findUnique: jest.fn().mockResolvedValue({ indexRevision: 1 }),
+        count: jest.fn().mockResolvedValue(0),
       },
       chapterChunk: {
         findMany: jest.fn(),
@@ -142,6 +157,38 @@ describe('ContentIndexService index lifecycle', () => {
       'DELETE FROM "ChapterChunkFts"',
     );
     expect(tx.vectorData.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('retries persisted pending indexes during the readiness check', async () => {
+    const { prisma, service, tx } = createHarness();
+    prisma.$queryRawUnsafe
+      .mockResolvedValueOnce([
+        {
+          totalChunks: 0,
+          ftsChunks: 0,
+          missingChunks: 0,
+          staleRows: 0,
+          mismatchedRows: 0,
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    prisma.book.count.mockResolvedValue(1);
+    prisma.book.findMany.mockResolvedValue([{ id: 'book-1' }]);
+    prisma.chapterChunk.findMany.mockResolvedValue([]);
+
+    await expect(service.search('react')).resolves.toEqual([]);
+
+    expect(tx.vectorData.deleteMany).toHaveBeenCalledWith();
+    expect(tx.book.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'book-1',
+        indexPending: true,
+        indexRevision: 1,
+      },
+      data: {
+        indexPending: false,
+      },
+    });
   });
 
   it('removes FTS and vector rows through the explicit book cleanup API', async () => {
@@ -205,6 +252,66 @@ describe('ContentIndexService index lifecycle', () => {
     expect(createManyArgs?.data[0]?.metadata).toContain(
       '"embeddingDimensions":96',
     );
+    expect(tx.book.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'book-1',
+        indexPending: true,
+        indexRevision: 1,
+      },
+      data: {
+        indexPending: false,
+      },
+    });
+  });
+
+  it('does not clear a newer pending revision after preparing stale content', async () => {
+    const { prisma, service, tx } = createHarness();
+    const storedBook = {
+      indexPending: true,
+      indexRevision: 1,
+    };
+    prisma.book.findUnique.mockImplementation(() =>
+      Promise.resolve({ indexRevision: storedBook.indexRevision }),
+    );
+    prisma.chapterChunk.findMany.mockImplementation(() => {
+      storedBook.indexRevision = 2;
+      return Promise.resolve([]);
+    });
+    tx.book.updateMany.mockImplementation(
+      ({
+        where,
+        data,
+      }: {
+        where: { indexRevision: number };
+        data: { indexPending: boolean };
+      }) => {
+        if (where.indexRevision === storedBook.indexRevision) {
+          storedBook.indexPending = data.indexPending;
+          return Promise.resolve({ count: 1 });
+        }
+        return Promise.resolve({ count: 0 });
+      },
+    );
+
+    await service.syncBook('book-1');
+
+    expect(tx.book.updateMany.mock.calls[0]?.[0].where.indexRevision).toBe(1);
+    expect(storedBook).toEqual({
+      indexPending: true,
+      indexRevision: 2,
+    });
+  });
+
+  it('does not clear pending state when indexing is cancelled', async () => {
+    const { service, tx } = createHarness();
+    const controller = new AbortController();
+    controller.abort(new Error('index cancelled'));
+
+    await expect(
+      service.syncBook('book-1', { signal: controller.signal }),
+    ).rejects.toThrow('index cancelled');
+
+    expect(tx.book.updateMany).not.toHaveBeenCalled();
   });
 
   it('keeps FTS current and preserves vectors when remote embeddings fail', async () => {
@@ -252,6 +359,7 @@ describe('ContentIndexService index lifecycle', () => {
     );
     expect(tx.vectorData.deleteMany).not.toHaveBeenCalled();
     expect(tx.vectorData.createMany).not.toHaveBeenCalled();
+    expect(tx.book.updateMany).not.toHaveBeenCalled();
   });
 
   it('rebuilds FTS without deleting existing vectors when a full remote rebuild fails', async () => {
@@ -328,6 +436,7 @@ describe('ContentIndexService index lifecycle', () => {
     );
     expect(tx.vectorData.deleteMany).not.toHaveBeenCalled();
     expect(tx.vectorData.createMany).not.toHaveBeenCalled();
+    expect(tx.book.updateMany).not.toHaveBeenCalled();
   });
 
   it('skips semantic results when the remote embedding query is unavailable', async () => {

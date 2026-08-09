@@ -4,7 +4,8 @@
   "private": true,
   "description": "Desktop shell for Moxu",
   "main": "src/main.cjs",
-  "author": "Moxu",
+  "author": "xiaobuliukun <xiaobuliukun@gmail.com>",
+  "homepage": "https://github.com/xiaobuliukun/ai-rag",
   "scripts": {
     "dev": "electron .",
     "test": "node --test test/*.test.cjs",
@@ -12,7 +13,9 @@
     "pack": "electron-builder --dir --publish never",
     "dist": "electron-builder --publish never",
     "dist:mac": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg zip --publish never",
-    "dist:mac:signed": "electron-builder --mac dmg zip --publish never",
+    "release:check:mac": "node scripts/release-security.cjs preflight",
+    "release:verify:mac": "node scripts/release-security.cjs verify ../../release/desktop",
+    "dist:mac:signed": "npm run release:check:mac && electron-builder --mac dmg zip --publish never && npm run release:verify:mac",
     "dist:win": "electron-builder --win nsis portable --publish never",
     "dist:linux": "electron-builder --linux AppImage deb --publish never"
   },
@@ -20,8 +23,8 @@
     "electron-updater": "6.8.9"
   },
   "devDependencies": {
-    "@electron/rebuild": "4.0.6",
-    "electron": "39.8.10",
+    "@electron/rebuild": "^4.2.0",
+    "electron": "43.3.0",
     "electron-builder": "26.15.3"
   },
   "build": {
@@ -58,10 +61,22 @@
         "to": "runtime/web/node_modules"
       }
     ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "xiaobuliukun",
+        "repo": "ai-rag",
+        "channel": "latest",
+        "releaseType": "release"
+      }
+    ],
     "mac": {
       "category": "public.app-category.education",
+      "icon": "build/icon.icns",
+      "artifactName": "Moxu-${version}-${arch}.${ext}",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
+      "notarize": true,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist"
     },
@@ -69,19 +84,25 @@
       "artifactName": "Moxu-${version}-${arch}.${ext}"
     },
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         "nsis",
         "portable"
-      ],
-      "artifactName": "Moxu-${version}-${arch}.${ext}"
+      ]
     },
     "nsis": {
+      "artifactName": "Moxu-Setup-${version}-${arch}.${ext}",
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true
     },
+    "portable": {
+      "artifactName": "Moxu-Portable-${version}-${arch}.${ext}"
+    },
     "linux": {
       "category": "Education",
+      "icon": "build/icon.png",
+      "maintainer": "xiaobuliukun <xiaobuliukun@gmail.com>",
       "target": [
         "AppImage",
         "deb"

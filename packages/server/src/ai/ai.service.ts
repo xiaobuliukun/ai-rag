@@ -8,6 +8,7 @@ import {
   AiChatResponse,
   AiChatHistoryMessage,
   AiChatStreamEvent,
+  AiConfigUpdateRequest,
   AiRuntimeConfig,
   AiSource,
   PersistedAiConfig,
@@ -124,6 +125,8 @@ type PreparedChat = {
   history: AiChatHistoryMessage[];
 };
 
+type StoredAiRuntimeConfig = AiRuntimeConfig & { updatedAt?: Date };
+
 @Injectable()
 export class AiService {
   constructor(
@@ -133,27 +136,31 @@ export class AiService {
 
   async getConfig(): Promise<PersistedAiConfig> {
     const persisted = await this.readPersistedConfig();
-    const config = await this.resolveConfig(persisted ?? undefined);
+    const config = this.resolveConfigValues(undefined, persisted);
 
-    return {
-      id: DEFAULT_AI_CONFIG_ID,
-      mode: config.mode,
-      baseUrl: config.baseUrl,
-      model: config.model,
-      apiKey: config.apiKey,
-      embeddingProvider: config.embeddingProvider,
-      embeddingModel: config.embeddingModel,
-      ragSourceCount: config.ragSourceCount,
-      ragContextChars: config.ragContextChars,
-      ragExcerptChars: config.ragExcerptChars,
-      updatedAt: persisted?.updatedAt,
-    };
+    return this.toPublicConfig(config, persisted?.updatedAt);
   }
 
-  async updateConfig(config: AiRuntimeConfig): Promise<PersistedAiConfig> {
+  async updateConfig(
+    config: AiConfigUpdateRequest,
+  ): Promise<PersistedAiConfig> {
     if (config.mode !== 'local' && config.mode !== 'openai-compatible') {
       throw new BadRequestException('Unsupported AI mode');
     }
+
+    const providedApiKey = config.apiKey?.trim();
+    if (config.clearApiKey && providedApiKey) {
+      throw new BadRequestException(
+        'apiKey and clearApiKey cannot be used together',
+      );
+    }
+
+    const persisted = await this.readPersistedConfig();
+    const encryptedApiKey = config.clearApiKey
+      ? null
+      : providedApiKey
+        ? encryptSecret(providedApiKey)
+        : undefined;
 
     const ragConfig = this.normalizeRagConfig(config);
     const embeddingConfig = normalizeEmbeddingConfig(config);
@@ -174,7 +181,7 @@ export class AiService {
         mode: config.mode,
         baseUrl,
         model: config.model?.trim() || null,
-        apiKey: encryptSecret(config.apiKey),
+        ...(encryptedApiKey !== undefined ? { apiKey: encryptedApiKey } : {}),
         embeddingProvider: embeddingConfig.embeddingProvider,
         embeddingModel: embeddingConfig.embeddingModel,
         ragSourceCount: ragConfig.ragSourceCount,
@@ -186,7 +193,10 @@ export class AiService {
         mode: config.mode,
         baseUrl,
         model: config.model?.trim() || null,
-        apiKey: encryptSecret(config.apiKey),
+        apiKey:
+          encryptedApiKey === undefined
+            ? encryptSecret(persisted?.apiKey)
+            : encryptedApiKey,
         embeddingProvider: embeddingConfig.embeddingProvider,
         embeddingModel: embeddingConfig.embeddingModel,
         ragSourceCount: ragConfig.ragSourceCount,
@@ -198,19 +208,23 @@ export class AiService {
     const savedRagConfig = this.normalizeRagConfig(saved);
     const savedEmbeddingConfig = normalizeEmbeddingConfig(saved);
 
-    return {
-      id: saved.id,
-      mode: saved.mode === 'openai-compatible' ? 'openai-compatible' : 'local',
-      baseUrl: saved.baseUrl ?? undefined,
-      model: saved.model ?? undefined,
-      apiKey: decryptSecret(saved.apiKey),
-      embeddingProvider: savedEmbeddingConfig.embeddingProvider,
-      embeddingModel: savedEmbeddingConfig.embeddingModel,
-      ragSourceCount: savedRagConfig.ragSourceCount,
-      ragContextChars: savedRagConfig.ragContextChars,
-      ragExcerptChars: savedRagConfig.ragExcerptChars,
-      updatedAt: saved.updatedAt,
-    };
+    const resolvedSaved = this.resolveConfigValues(
+      {
+        mode:
+          saved.mode === 'openai-compatible' ? 'openai-compatible' : 'local',
+        baseUrl: saved.baseUrl ?? undefined,
+        model: saved.model ?? undefined,
+        apiKey: decryptSecret(saved.apiKey),
+        embeddingProvider: savedEmbeddingConfig.embeddingProvider,
+        embeddingModel: savedEmbeddingConfig.embeddingModel,
+        ragSourceCount: savedRagConfig.ragSourceCount,
+        ragContextChars: savedRagConfig.ragContextChars,
+        ragExcerptChars: savedRagConfig.ragExcerptChars,
+      },
+      null,
+    );
+
+    return this.toPublicConfig(resolvedSaved, saved.updatedAt, saved.id);
   }
 
   async chat(request: AiChatRequest): Promise<AiChatResponse> {
@@ -783,7 +797,14 @@ export class AiService {
   private async resolveConfig(
     config?: AiRuntimeConfig,
   ): Promise<Required<AiRuntimeConfig>> {
-    const persisted = config ? undefined : await this.readPersistedConfig();
+    const persisted = await this.readPersistedConfig();
+    return this.resolveConfigValues(config, persisted);
+  }
+
+  private resolveConfigValues(
+    config: AiRuntimeConfig | undefined,
+    persisted: StoredAiRuntimeConfig | null,
+  ): Required<AiRuntimeConfig> {
     const envBaseUrl = process.env.AI_BASE_URL || process.env.OPENAI_BASE_URL;
     const envApiKey = process.env.AI_API_KEY || process.env.OPENAI_API_KEY;
     const envModel = process.env.AI_MODEL || process.env.OPENAI_MODEL;
@@ -830,6 +851,29 @@ export class AiService {
       ragSourceCount: ragConfig.ragSourceCount,
       ragContextChars: ragConfig.ragContextChars,
       ragExcerptChars: ragConfig.ragExcerptChars,
+    };
+  }
+
+  private toPublicConfig(
+    config: Required<AiRuntimeConfig>,
+    updatedAt?: Date,
+    id = DEFAULT_AI_CONFIG_ID,
+  ): PersistedAiConfig {
+    const apiKey = config.apiKey.trim();
+
+    return {
+      id,
+      mode: config.mode,
+      baseUrl: config.baseUrl,
+      model: config.model,
+      hasApiKey: apiKey.length > 0,
+      maskedApiKey: apiKey ? maskApiKey(apiKey) : undefined,
+      embeddingProvider: config.embeddingProvider,
+      embeddingModel: config.embeddingModel,
+      ragSourceCount: config.ragSourceCount,
+      ragContextChars: config.ragContextChars,
+      ragExcerptChars: config.ragExcerptChars,
+      updatedAt,
     };
   }
 
@@ -901,7 +945,7 @@ export class AiService {
       ragContextChars: ragConfig.ragContextChars,
       ragExcerptChars: ragConfig.ragExcerptChars,
       updatedAt: saved.updatedAt,
-    } satisfies AiRuntimeConfig & { updatedAt?: Date };
+    } satisfies StoredAiRuntimeConfig;
   }
 
   private async callOpenAICompatible(
@@ -1151,6 +1195,14 @@ function clampInteger(
 
 function toOptionalNumber(value?: string) {
   return value === undefined ? undefined : Number(value);
+}
+
+function maskApiKey(apiKey: string) {
+  if (apiKey.length <= 4) {
+    return '••••';
+  }
+
+  return `••••${apiKey.slice(-4)}`;
 }
 
 function normalizeEmbeddingConfig(config: {

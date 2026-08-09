@@ -2,7 +2,7 @@ import {
   AiChatRequest,
   AiChatResponse,
   AiChatStreamEvent,
-  AiRuntimeConfig,
+  AiConfigUpdateRequest,
   Book,
   Bookmark,
   BackupPayload,
@@ -21,6 +21,7 @@ import {
   UpdateBookRequest,
   UpdateBookmarkRequest,
 } from "@/types";
+import { REPLACE_BACKUP_CONFIRMATION } from "@moxu/shared";
 
 type MoxuDesktopBridge = {
   apiBaseUrl?: string;
@@ -249,7 +250,7 @@ export function getAIConfig() {
   return fetchJson<PersistedAiConfig>("/ai/config", { cache: "no-store" });
 }
 
-export function saveAIConfig(config: AiRuntimeConfig) {
+export function saveAIConfig(config: AiConfigUpdateRequest) {
   return fetchJson<PersistedAiConfig>("/ai/config", {
     method: "PUT",
     body: JSON.stringify(config),
@@ -301,7 +302,13 @@ export function importBackup(
 ) {
   return fetchJson<ImportBackupResponse>("/backup/import", {
     method: "POST",
-    body: JSON.stringify({ payload, mode }),
+    body: JSON.stringify({
+      payload,
+      mode,
+      ...(mode === "replace"
+        ? { replaceConfirmation: REPLACE_BACKUP_CONFIRMATION }
+        : {}),
+    }),
   });
 }
 
@@ -363,13 +370,13 @@ export async function streamChatWithAI(
 
 export function createApiHeaders(init?: HeadersInit) {
   const headers = new Headers(init);
-  if (!headers.has('Content-Type')) {
-    headers.set('Content-Type', 'application/json');
+  if (!headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
   }
 
   const accessToken = getApiAccessToken();
-  if (accessToken && !headers.has('Authorization')) {
-    headers.set('Authorization', `Bearer ${accessToken}`);
+  if (accessToken && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${accessToken}`);
   }
 
   return headers;

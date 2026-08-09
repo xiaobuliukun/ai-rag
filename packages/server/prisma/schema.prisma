@@ -10,17 +10,19 @@ datasource db {
 }
 
 model Book {
-  id          String     @id @default(cuid())
-  title       String
-  path        String     @unique
-  description String?
-  tags        String     @default("[]")
-  coverImage  String?
-  chapters    Chapter[]
-  bookmarks   Bookmark[]
-  lastRead    DateTime   @default(now())
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @default(now()) @updatedAt
+  id            String     @id @default(cuid())
+  title         String
+  path          String     @unique
+  description   String?
+  tags          String     @default("[]")
+  coverImage    String?
+  indexPending  Boolean    @default(false)
+  indexRevision Int        @default(0)
+  chapters      Chapter[]
+  bookmarks     Bookmark[]
+  lastRead      DateTime   @default(now())
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @default(now()) @updatedAt
 }
 
 model Chapter {
@@ -37,7 +39,7 @@ model Chapter {
   bookmarks       Bookmark[]
   readingProgress ReadingProgress?
   vectors         VectorData[]
-  
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -88,18 +90,18 @@ model Bookmark {
 }
 
 model AiConfig {
-  id              String   @id
-  mode            String   @default("local")
-  baseUrl         String?
-  model           String?
-  apiKey          String?
-  embeddingProvider String @default("local")
+  id                String   @id
+  mode              String   @default("local")
+  baseUrl           String?
+  model             String?
+  apiKey            String?
+  embeddingProvider String   @default("local")
   embeddingModel    String?
-  ragSourceCount  Int      @default(5)
-  ragContextChars Int      @default(12000)
-  ragExcerptChars Int      @default(520)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  ragSourceCount    Int      @default(5)
+  ragContextChars   Int      @default(12000)
+  ragExcerptChars   Int      @default(520)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 }
 
 model VectorData {

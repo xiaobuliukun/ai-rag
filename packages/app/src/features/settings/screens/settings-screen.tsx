@@ -1,12 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  Switch,
-  View
-} from "react-native";
+import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Switch, View } from "react-native";
 import { CheckCircle2, RotateCcw, Save, Server, SlidersHorizontal } from "lucide-react-native";
 import type { AiRuntimeConfig } from "@moxu/shared";
 import { useAppTheme } from "@/application/providers/root-providers";
@@ -16,26 +9,21 @@ import { createMoxuApi } from "@/infrastructure/api/moxu-api";
 
 export function SettingsScreen() {
   const { colors } = useAppTheme();
-  const {
-    settings,
-    setApiBaseUrl,
-    setApiAccessToken,
-    setAiConfig,
-    resetSettings
-  } = useAppSettings();
+  const { settings, setApiBaseUrl, setApiAccessToken, setAiConfig, resetSettings } = useAppSettings();
   const api = useMemo(
     () => createMoxuApi(settings.apiBaseUrl, settings.apiAccessToken),
     [settings.apiAccessToken, settings.apiBaseUrl]
   );
   const [apiBaseUrl, setApiBaseUrlDraft] = useState(settings.apiBaseUrl);
-  const [apiAccessToken, setApiAccessTokenDraft] = useState(
-    settings.apiAccessToken ?? ""
-  );
+  const [apiAccessToken, setApiAccessTokenDraft] = useState(settings.apiAccessToken ?? "");
   const [aiConfig, setAiConfigDraft] = useState<AiRuntimeConfig>(settings.aiConfig);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
+  const [hasStoredApiKey, setHasStoredApiKey] = useState(false);
+  const [maskedApiKey, setMaskedApiKey] = useState<string | undefined>();
+  const [clearApiKey, setClearApiKey] = useState(false);
 
   useEffect(() => {
     setApiBaseUrlDraft(settings.apiBaseUrl);
@@ -53,13 +41,16 @@ export function SettingsScreen() {
             mode: config.mode,
             baseUrl: config.baseUrl,
             model: config.model,
-            apiKey: config.apiKey,
+            apiKey: config.hasApiKey ? "" : settings.aiConfig.apiKey,
             embeddingProvider: config.embeddingProvider,
             embeddingModel: config.embeddingModel,
             ragSourceCount: config.ragSourceCount,
             ragContextChars: config.ragContextChars,
             ragExcerptChars: config.ragExcerptChars
           });
+          setHasStoredApiKey(config.hasApiKey);
+          setMaskedApiKey(config.maskedApiKey);
+          setClearApiKey(false);
         }
       })
       .catch(() => undefined);
@@ -67,7 +58,7 @@ export function SettingsScreen() {
     return () => {
       cancelled = true;
     };
-  }, [api]);
+  }, [api, settings.aiConfig.apiKey]);
 
   const patchAiConfig = (patch: Partial<AiRuntimeConfig>) => {
     setAiConfigDraft((current) => ({
@@ -98,21 +89,26 @@ export function SettingsScreen() {
     try {
       await setApiBaseUrl(apiBaseUrl);
       await setApiAccessToken(apiAccessToken);
-      const saved = await createMoxuApi(
-        apiBaseUrl,
-        apiAccessToken
-      ).saveAIConfig(aiConfig);
+      const saved = await createMoxuApi(apiBaseUrl, apiAccessToken).saveAIConfig({
+        ...aiConfig,
+        apiKey: clearApiKey ? undefined : aiConfig.apiKey?.trim() || undefined,
+        clearApiKey
+      });
       await setAiConfig({
         mode: saved.mode,
         baseUrl: saved.baseUrl,
         model: saved.model,
-        apiKey: saved.apiKey,
+        apiKey: "",
         embeddingProvider: saved.embeddingProvider,
         embeddingModel: saved.embeddingModel,
         ragSourceCount: saved.ragSourceCount,
         ragContextChars: saved.ragContextChars,
         ragExcerptChars: saved.ragExcerptChars
       });
+      setAiConfigDraft((current) => ({ ...current, apiKey: "" }));
+      setHasStoredApiKey(saved.hasApiKey);
+      setMaskedApiKey(saved.maskedApiKey);
+      setClearApiKey(false);
       setStatus("设置已保存");
     } catch (err) {
       setError(err instanceof Error ? err.message : "保存失败");
@@ -123,15 +119,9 @@ export function SettingsScreen() {
 
   return (
     <Screen>
-      <KeyboardAvoidingView
-        style={styles.keyboard}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-      >
+      <KeyboardAvoidingView style={styles.keyboard} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-          <SectionHeader
-            title="设置"
-            subtitle="连接本地服务，调整移动端 AI 与 RAG 参数"
-          />
+          <SectionHeader title="设置" subtitle="连接本地服务，调整移动端 AI 与 RAG 参数" />
 
           <Card style={styles.section}>
             <View style={styles.sectionTitle}>
@@ -158,12 +148,7 @@ export function SettingsScreen() {
               placeholder="与服务端 API_ACCESS_TOKEN 一致"
             />
             <View style={styles.buttonRow}>
-              <Button
-                title="测试连接"
-                variant="secondary"
-                loading={isTesting}
-                onPress={handleTest}
-              />
+              <Button title="测试连接" variant="secondary" loading={isTesting} onPress={handleTest} />
               <Button
                 title="恢复默认"
                 variant="ghost"
@@ -210,10 +195,43 @@ export function SettingsScreen() {
             <LabeledField
               label="API Key"
               value={aiConfig.apiKey ?? ""}
-              placeholder="sk-..."
+              placeholder={hasStoredApiKey ? (maskedApiKey ?? "••••••••") : "sk-..."}
               secureTextEntry
-              onChangeText={(value) => patchAiConfig({ apiKey: value })}
+              editable={!clearApiKey}
+              onChangeText={(value) => {
+                patchAiConfig({ apiKey: value });
+                if (value) {
+                  setClearApiKey(false);
+                }
+              }}
             />
+            <AppText variant="caption" tone="muted">
+              {hasStoredApiKey ? "API Key 已保存在服务端，留空会保留现有密钥。" : "服务端尚未保存 API Key。"}
+            </AppText>
+            {hasStoredApiKey ? (
+              <View style={styles.switchRow}>
+                <View style={styles.switchText}>
+                  <AppText variant="label">清除服务端 API Key</AppText>
+                  <AppText variant="caption" tone="muted">
+                    只有显式开启后保存才会删除。
+                  </AppText>
+                </View>
+                <Switch
+                  value={clearApiKey}
+                  onValueChange={(enabled) => {
+                    setClearApiKey(enabled);
+                    if (enabled) {
+                      patchAiConfig({ apiKey: "" });
+                    }
+                  }}
+                  trackColor={{
+                    false: colors.surfaceMuted,
+                    true: colors.danger
+                  }}
+                  thumbColor={colors.surface}
+                />
+              </View>
+            ) : null}
             <View style={styles.switchRow}>
               <View style={styles.switchText}>
                 <AppText variant="label">远程 Embedding</AppText>
@@ -228,7 +246,10 @@ export function SettingsScreen() {
                     embeddingProvider: enabled ? "openai-compatible" : "local"
                   })
                 }
-                trackColor={{ false: colors.surfaceMuted, true: colors.primary }}
+                trackColor={{
+                  false: colors.surfaceMuted,
+                  true: colors.primary
+                }}
                 thumbColor={colors.surface}
               />
             </View>
@@ -272,9 +293,7 @@ export function SettingsScreen() {
             <Card>
               <View style={styles.feedback}>
                 {status ? <CheckCircle2 color={colors.success} size={18} /> : null}
-                <AppText tone={error ? "danger" : "primary"}>
-                  {error ?? status}
-                </AppText>
+                <AppText tone={error ? "danger" : "primary"}>{error ?? status}</AppText>
               </View>
             </Card>
           ) : null}
@@ -291,10 +310,7 @@ export function SettingsScreen() {
   );
 }
 
-function LabeledField({
-  label,
-  ...props
-}: { label: string } & React.ComponentProps<typeof Field>) {
+function LabeledField({ label, ...props }: { label: string } & React.ComponentProps<typeof Field>) {
   return (
     <View style={styles.fieldGroup}>
       <AppText variant="label">{label}</AppText>

@@ -1,7 +1,7 @@
 import type {
   AiChatRequest,
   AiChatResponse,
-  AiRuntimeConfig,
+  AiConfigUpdateRequest,
   Book,
   Bookmark,
   Chapter,
@@ -65,13 +65,13 @@ export function createMoxuApi(baseUrl: string, accessToken?: string) {
     ) =>
       client.request<Chapter>(`/books/${bookId}/chapters/${chapterId}/progress`, {
         method: "PUT",
-        body: JSON.stringify({ progress, scrollPosition, readingSecondsDelta })
+        body: JSON.stringify({
+          progress,
+          scrollPosition,
+          readingSecondsDelta
+        })
       }),
-    searchLibrary: (
-      query: string,
-      type: SearchResultType = "all",
-      bookId?: string
-    ) => {
+    searchLibrary: (query: string, type: SearchResultType = "all", bookId?: string) => {
       const params = new URLSearchParams({ q: query });
       if (type !== "all") {
         params.set("type", type);
@@ -90,16 +90,12 @@ export function createMoxuApi(baseUrl: string, accessToken?: string) {
       client.request<ScanJobResponse>("/scan/rescan-known/jobs", {
         method: "POST"
       }),
-    getScanJob: (jobId: string) =>
-      client.request<ScanJobResponse>(`/scan/jobs/${jobId}`),
+    getScanJob: (jobId: string) => client.request<ScanJobResponse>(`/scan/jobs/${jobId}`),
     cancelScanJob: (jobId: string) =>
       client.request<ScanJobResponse>(`/scan/jobs/${jobId}/cancel`, {
         method: "POST"
       }),
-    waitForScanJob: async (
-      jobId: string,
-      onUpdate: (job: ScanJobStatus) => void
-    ) => {
+    waitForScanJob: async (jobId: string, onUpdate: (job: ScanJobStatus) => void) => {
       while (true) {
         const { job } = await client.request<ScanJobResponse>(`/scan/jobs/${jobId}`);
         onUpdate(job);
@@ -115,12 +111,11 @@ export function createMoxuApi(baseUrl: string, accessToken?: string) {
         body: JSON.stringify(request)
       }),
     getAIConfig: () => client.request<PersistedAiConfig>("/ai/config"),
-    saveAIConfig: (config: AiRuntimeConfig) =>
+    saveAIConfig: (config: AiConfigUpdateRequest) =>
       client.request<PersistedAiConfig>("/ai/config", {
         method: "PUT",
         body: JSON.stringify(config)
       }),
-    getSearchIndexStatus: () =>
-      client.request<SearchIndexStatus>("/search/index-status")
+    getSearchIndexStatus: () => client.request<SearchIndexStatus>("/search/index-status")
   };
 }

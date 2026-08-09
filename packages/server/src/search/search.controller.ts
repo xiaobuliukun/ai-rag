@@ -1,5 +1,9 @@
 import { Controller, Get, Query } from '@nestjs/common';
-import type { SearchResultType } from '@moxu/shared';
+import type { SearchQueryRequest } from '../validation/request-validation';
+import {
+  RequestValidationPipe,
+  validateSearchQuery,
+} from '../validation/request-validation';
 import { SearchService } from './search.service';
 
 @Controller('search')
@@ -13,10 +17,9 @@ export class SearchController {
 
   @Get()
   search(
-    @Query('q') query = '',
-    @Query('bookId') bookId?: string,
-    @Query('type') type?: SearchResultType,
+    @Query(new RequestValidationPipe(validateSearchQuery))
+    query: SearchQueryRequest,
   ) {
-    return this.searchService.search(query, bookId, type);
+    return this.searchService.search(query.q ?? '', query.bookId, query.type);
   }
 }

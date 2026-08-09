@@ -2,9 +2,14 @@ import { Body, Controller, Get, Post, Put, Res } from '@nestjs/common';
 import type {
   AiChatRequest,
   AiChatStreamEvent,
-  AiRuntimeConfig,
+  AiConfigUpdateRequest,
 } from '@moxu/shared';
 import type { Response } from 'express';
+import {
+  RequestValidationPipe,
+  validateAiChatRequest,
+  validateAiConfigUpdate,
+} from '../validation/request-validation';
 import { AiService } from './ai.service';
 
 @Controller('ai')
@@ -12,7 +17,10 @@ export class AiController {
   constructor(private readonly aiService: AiService) {}
 
   @Post('chat')
-  chat(@Body() request: AiChatRequest) {
+  chat(
+    @Body(new RequestValidationPipe(validateAiChatRequest))
+    request: AiChatRequest,
+  ) {
     return this.aiService.chat(request);
   }
 
@@ -22,12 +30,19 @@ export class AiController {
   }
 
   @Put('config')
-  updateConfig(@Body() config: AiRuntimeConfig) {
+  updateConfig(
+    @Body(new RequestValidationPipe(validateAiConfigUpdate))
+    config: AiConfigUpdateRequest,
+  ) {
     return this.aiService.updateConfig(config);
   }
 
   @Post('chat/stream')
-  async streamChat(@Body() request: AiChatRequest, @Res() response: Response) {
+  async streamChat(
+    @Body(new RequestValidationPipe(validateAiChatRequest))
+    request: AiChatRequest,
+    @Res() response: Response,
+  ) {
     response.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
     response.setHeader('Cache-Control', 'no-cache, no-transform');
     response.setHeader('Connection', 'keep-alive');

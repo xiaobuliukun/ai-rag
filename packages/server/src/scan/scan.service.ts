@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { ScanJobPhase } from '@moxu/shared';
+import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import * as fs from 'fs-extra';
 import * as path from 'path';
@@ -10,6 +11,14 @@ import { ContentIndexService } from '../content/content-index.service';
 type MarkdownFile = {
   absolutePath: string;
   relativePath: string;
+};
+
+type PreparedChapter = {
+  file: MarkdownFile;
+  orderIndex: number;
+  title: string;
+  content: string;
+  chunks: ReturnType<typeof chunkMarkdownContent>;
 };
 
 export type ScanProgress = {
@@ -214,33 +223,62 @@ export class ScanService {
       message: `Scanning ${bookTitle}`,
     });
 
-    // Create or update Book
-    const book = await this.prisma.book.upsert({
-      where: { path: bookPath },
-      update: {},
-      create: {
-        title: bookTitle,
-        path: bookPath,
-      },
-    });
-
     const chapterFiles = await this.findMarkdownFiles(bookPath);
-    let bookChanged = false;
+    const preparedChapters: PreparedChapter[] = [];
 
     for (const [index, file] of chapterFiles.entries()) {
       assertNotCancelled(options.signal);
-      bookChanged =
-        (await this.processChapter(book.id, file, index)) || bookChanged;
+      preparedChapters.push(await this.prepareChapter(file, index));
     }
 
     assertNotCancelled(options.signal);
-    bookChanged =
-      (await this.removeMissingChapters(
-        book.id,
-        chapterFiles.map((file) => file.relativePath),
-      )) || bookChanged;
+    const { bookId, needsIndex } = await this.prisma.$transaction(
+      async (tx) => {
+        const book = await tx.book.upsert({
+          where: { path: bookPath },
+          update: {},
+          create: {
+            title: bookTitle,
+            path: bookPath,
+          },
+        });
+        const indexWasPending = book.indexPending === true;
+        let changed = false;
 
-    if (bookChanged) {
+        for (const chapter of preparedChapters) {
+          assertNotCancelled(options.signal);
+          changed =
+            (await this.processChapter(tx, book.id, chapter)) || changed;
+        }
+
+        assertNotCancelled(options.signal);
+        changed =
+          (await this.removeMissingChapters(
+            tx,
+            book.id,
+            chapterFiles.map((file) => file.relativePath),
+          )) || changed;
+
+        if (changed) {
+          await tx.book.update({
+            where: { id: book.id },
+            data: {
+              indexPending: true,
+              indexRevision: {
+                increment: 1,
+              },
+            },
+          });
+        }
+
+        return {
+          bookId: book.id,
+          needsIndex: changed || indexWasPending,
+        };
+      },
+    );
+
+    if (needsIndex) {
       options.onProgress?.({
         phase: 'indexing',
         currentBook: bookTitle,
@@ -248,11 +286,11 @@ export class ScanService {
       });
       assertNotCancelled(options.signal);
       if (options.signal) {
-        await this.contentIndex.syncBook(book.id, {
+        await this.contentIndex.syncBook(bookId, {
           signal: options.signal,
         });
       } else {
-        await this.contentIndex.syncBook(book.id);
+        await this.contentIndex.syncBook(bookId);
       }
       assertNotCancelled(options.signal);
     }
@@ -301,8 +339,12 @@ export class ScanService {
     return filePath.split(path.sep).join('/');
   }
 
-  private async removeMissingChapters(bookId: string, fileNames: string[]) {
-    const result = await this.prisma.chapter.deleteMany({
+  private async removeMissingChapters(
+    tx: Prisma.TransactionClient,
+    bookId: string,
+    fileNames: string[],
+  ) {
+    const result = await tx.chapter.deleteMany({
       where: {
         bookId,
         ...(fileNames.length > 0 ? { fileName: { notIn: fileNames } } : {}),
@@ -311,23 +353,33 @@ export class ScanService {
     return result.count > 0;
   }
 
-  private async processChapter(
-    bookId: string,
+  private async prepareChapter(
     file: MarkdownFile,
     orderIndex: number,
-  ) {
-    // Read file content
+  ): Promise<PreparedChapter> {
     const fileContent = await fs.readFile(file.absolutePath, 'utf-8');
-
     const { data, content } = matter(fileContent);
-
-    // Determine title: Frontmatter title > Filename (without extension)
     let title = typeof data.title === 'string' ? data.title : undefined;
     if (!title) {
       title = path.parse(file.relativePath).name;
-      // Remove number prefix if exists (e.g., "01-Intro" -> "Intro")
       title = title.replace(/^\d+[-_.]\s*/, '');
     }
+
+    return {
+      file,
+      orderIndex,
+      title,
+      content,
+      chunks: chunkMarkdownContent(content),
+    };
+  }
+
+  private async processChapter(
+    tx: Prisma.TransactionClient,
+    bookId: string,
+    prepared: PreparedChapter,
+  ) {
+    const { file, orderIndex, title, content, chunks } = prepared;
 
     const where = {
       bookId_fileName: {
@@ -335,7 +387,7 @@ export class ScanService {
         fileName: file.relativePath,
       },
     };
-    const existing = await this.prisma.chapter.findUnique({
+    const existing = await tx.chapter.findUnique({
       where,
       select: {
         id: true,
@@ -351,7 +403,7 @@ export class ScanService {
       (existing.title !== title || existing.orderIndex !== orderIndex);
     const chapter = existing
       ? metadataChanged || contentChanged
-        ? await this.prisma.chapter.update({
+        ? await tx.chapter.update({
             where: { id: existing.id },
             data: {
               title,
@@ -361,7 +413,7 @@ export class ScanService {
             },
           })
         : existing
-      : await this.prisma.chapter.create({
+      : await tx.chapter.create({
           data: {
             bookId,
             title,
@@ -375,15 +427,14 @@ export class ScanService {
       return metadataChanged;
     }
 
-    const chunks = chunkMarkdownContent(content);
-    await this.prisma.chapterChunk.deleteMany({
+    await tx.chapterChunk.deleteMany({
       where: {
         chapterId: chapter.id,
       },
     });
 
     if (chunks.length > 0) {
-      await this.prisma.chapterChunk.createMany({
+      await tx.chapterChunk.createMany({
         data: chunks.map((chunk) => ({
           chapterId: chapter.id,
           chunkIndex: chunk.chunkIndex,

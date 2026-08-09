@@ -18,6 +18,9 @@ type AiConfigRecord = {
 };
 
 type AiConfigUpsertPayload = {
+  update: {
+    apiKey?: string | null;
+  };
   create: {
     apiKey: string | null;
     embeddingProvider: string;
@@ -359,9 +362,12 @@ describe('AiService', () => {
         Promise.resolve({ ...saved, apiKey: data.apiKey }),
       );
 
-      await expect(service.getConfig()).resolves.toMatchObject({
-        apiKey: 'sk-legacy',
+      const config = await service.getConfig();
+      expect(config).toMatchObject({
+        hasApiKey: true,
+        maskedApiKey: '••••gacy',
       });
+      expect(config).not.toHaveProperty('apiKey');
 
       const update = prisma.aiConfig.update.mock.calls[0]?.[0];
       expect(update?.data.apiKey).toMatch(/^enc:v1:/);
@@ -416,7 +422,8 @@ describe('AiService', () => {
       }),
     ).resolves.toMatchObject({
       mode: 'openai-compatible',
-      apiKey: 'sk-test',
+      hasApiKey: true,
+      maskedApiKey: '••••test',
       embeddingProvider: 'openai-compatible',
       embeddingModel: 'text-embedding-3-small',
       ragSourceCount: 10,
@@ -434,6 +441,137 @@ describe('AiService', () => {
     expect(capturedPayload?.create.ragSourceCount).toBe(10);
     expect(capturedPayload?.create.ragContextChars).toBe(4000);
     expect(capturedPayload?.create.ragExcerptChars).toBe(900);
+  });
+
+  it('keeps an existing API key when an update omits or empties it', async () => {
+    const saved: AiConfigRecord = {
+      id: 'default',
+      mode: 'openai-compatible',
+      baseUrl: 'https://api.example.com/v1',
+      model: 'gpt-test',
+      apiKey: encryptSecret('sk-existing'),
+      embeddingProvider: 'local',
+      embeddingModel: null,
+      ragSourceCount: 5,
+      ragContextChars: 12000,
+      ragExcerptChars: 520,
+      updatedAt: new Date('2026-08-08T00:00:00.000Z'),
+    };
+    prisma.aiConfig.findUnique.mockResolvedValue(saved);
+    prisma.aiConfig.upsert.mockImplementation((payload) =>
+      Promise.resolve({
+        ...saved,
+        apiKey: payload.update.apiKey ?? saved.apiKey,
+      }),
+    );
+
+    const response = await service.updateConfig({
+      mode: 'openai-compatible',
+      baseUrl: saved.baseUrl ?? undefined,
+      model: saved.model ?? undefined,
+      apiKey: '   ',
+    });
+
+    expect(prisma.aiConfig.upsert.mock.calls[0]?.[0].update).not.toHaveProperty(
+      'apiKey',
+    );
+    expect(response).toMatchObject({
+      hasApiKey: true,
+      maskedApiKey: '••••ting',
+    });
+    expect(response).not.toHaveProperty('apiKey');
+  });
+
+  it('only clears an existing API key with the explicit clear flag', async () => {
+    const previousAiApiKey = process.env.AI_API_KEY;
+    const previousOpenAiApiKey = process.env.OPENAI_API_KEY;
+    const saved: AiConfigRecord = {
+      id: 'default',
+      mode: 'local',
+      baseUrl: null,
+      model: null,
+      apiKey: encryptSecret('sk-existing'),
+      embeddingProvider: 'local',
+      embeddingModel: null,
+      ragSourceCount: 5,
+      ragContextChars: 12000,
+      ragExcerptChars: 520,
+      updatedAt: new Date('2026-08-08T00:00:00.000Z'),
+    };
+    prisma.aiConfig.findUnique.mockResolvedValue(saved);
+    prisma.aiConfig.upsert.mockImplementation((payload) =>
+      Promise.resolve({
+        ...saved,
+        apiKey: payload.update.apiKey ?? null,
+      }),
+    );
+
+    try {
+      delete process.env.AI_API_KEY;
+      delete process.env.OPENAI_API_KEY;
+      const response = await service.updateConfig({
+        mode: 'local',
+        clearApiKey: true,
+      });
+
+      expect(
+        prisma.aiConfig.upsert.mock.calls[0]?.[0].update.apiKey,
+      ).toBeNull();
+      expect(response).toMatchObject({ hasApiKey: false });
+      expect(response).not.toHaveProperty('apiKey');
+    } finally {
+      if (previousAiApiKey === undefined) {
+        delete process.env.AI_API_KEY;
+      } else {
+        process.env.AI_API_KEY = previousAiApiKey;
+      }
+      if (previousOpenAiApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousOpenAiApiKey;
+      }
+    }
+  });
+
+  it('uses the persisted API key when a chat config leaves it blank', async () => {
+    const saved: AiConfigRecord = {
+      id: 'default',
+      mode: 'openai-compatible',
+      baseUrl: 'https://api.example.com/v1',
+      model: 'gpt-test',
+      apiKey: encryptSecret('sk-existing'),
+      embeddingProvider: 'local',
+      embeddingModel: null,
+      ragSourceCount: 5,
+      ragContextChars: 12000,
+      ragExcerptChars: 520,
+      updatedAt: new Date('2026-08-08T00:00:00.000Z'),
+    };
+    prisma.aiConfig.findUnique.mockResolvedValue(saved);
+    prisma.chapterChunk.findMany.mockResolvedValue([]);
+    prisma.chapter.findMany.mockResolvedValue([]);
+    const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({ choices: [{ message: { content: 'Answer' } }] }),
+    } as Response);
+
+    await service.chat({
+      message: 'Question',
+      config: {
+        mode: 'openai-compatible',
+        baseUrl: 'https://api.example.com/v1',
+        model: 'gpt-test',
+        apiKey: '',
+      },
+    });
+
+    const requestUrl = fetchMock.mock.calls[0]?.[0];
+    const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const headers = requestInit.headers as Record<string, string>;
+    expect(requestUrl).toBe('https://api.example.com/v1/chat/completions');
+    expect(headers.Authorization).toBe('Bearer sk-existing');
+    fetchMock.mockRestore();
   });
 
   it('streams local answers with sources and a final response', async () => {

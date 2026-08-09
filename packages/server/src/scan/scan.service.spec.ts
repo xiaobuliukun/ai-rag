@@ -9,10 +9,11 @@ import * as path from 'path';
 describe('ScanService', () => {
   let service: ScanService;
   let tempDir: string;
-  const prisma = {
+  const tx = {
     book: {
       findMany: jest.fn(),
       upsert: jest.fn(),
+      update: jest.fn(),
     },
     chapter: {
       findUnique: jest.fn(),
@@ -25,6 +26,12 @@ describe('ScanService', () => {
       createMany: jest.fn(),
     },
   };
+  const prisma = {
+    ...tx,
+    $transaction: jest.fn(
+      async (callback: (client: typeof tx) => unknown) => await callback(tx),
+    ),
+  };
   const contentIndex = {
     syncBook: jest.fn(),
   };
@@ -33,6 +40,7 @@ describe('ScanService', () => {
     jest.clearAllMocks();
     prisma.chapter.findUnique.mockResolvedValue(null);
     prisma.chapter.deleteMany.mockResolvedValue({ count: 0 });
+    prisma.book.update.mockResolvedValue({});
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'moxu-scan-'));
 
     const module: TestingModule = await Test.createTestingModule({
@@ -229,6 +237,129 @@ describe('ScanService', () => {
     });
     expect(prisma.chapter.create).not.toHaveBeenCalled();
     expect(contentIndex.syncBook).toHaveBeenCalledWith('book-1');
+  });
+
+  it('rolls back the per-book transaction and skips indexing when chunk writes fail', async () => {
+    const bookPath = path.join(tempDir, 'Book A');
+    await fs.outputFile(path.join(bookPath, '01-intro.md'), '# Intro');
+
+    prisma.book.upsert.mockResolvedValue({ id: 'book-1' });
+    prisma.chapter.create.mockResolvedValue({ id: 'chapter-1' });
+    prisma.chapterChunk.createMany.mockRejectedValueOnce(
+      new Error('chunk write failed'),
+    );
+
+    await expect(service.scanDirectory(tempDir)).rejects.toThrow(
+      'chunk write failed',
+    );
+
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.chapterChunk.deleteMany).toHaveBeenCalledWith({
+      where: { chapterId: 'chapter-1' },
+    });
+    expect(prisma.chapter.deleteMany).not.toHaveBeenCalled();
+    expect(contentIndex.syncBook).not.toHaveBeenCalled();
+  });
+
+  it('persists a retry marker when indexing fails after scan data commits', async () => {
+    const bookPath = path.join(tempDir, 'Book A');
+    await fs.outputFile(path.join(bookPath, '01-intro.md'), '# Intro');
+
+    prisma.book.upsert.mockResolvedValue({
+      id: 'book-1',
+      indexPending: false,
+    });
+    prisma.chapter.create.mockResolvedValue({ id: 'chapter-1' });
+    contentIndex.syncBook.mockRejectedValueOnce(new Error('index failed'));
+
+    await expect(service.scanDirectory(tempDir)).rejects.toThrow(
+      'index failed',
+    );
+
+    expect(prisma.book.update).toHaveBeenCalledWith({
+      where: { id: 'book-1' },
+      data: {
+        indexPending: true,
+        indexRevision: {
+          increment: 1,
+        },
+      },
+    });
+  });
+
+  it('retries an unchanged pending book after the scan service restarts', async () => {
+    const bookPath = path.join(tempDir, 'Book A');
+    await fs.outputFile(path.join(bookPath, '01-intro.md'), '# Intro');
+
+    prisma.book.upsert.mockResolvedValue({
+      id: 'book-1',
+      indexPending: true,
+      indexRevision: 1,
+    });
+    prisma.chapter.findUnique.mockResolvedValue({
+      id: 'chapter-1',
+      title: 'intro',
+      orderIndex: 0,
+      content: '# Intro',
+      updatedAt: new Date('2026-08-09T00:00:00.000Z'),
+    });
+    const restartedService = new ScanService(
+      prisma as never,
+      contentIndex as never,
+    );
+
+    await restartedService.scanDirectory(tempDir);
+
+    expect(prisma.chapter.update).not.toHaveBeenCalled();
+    expect(prisma.book.update).not.toHaveBeenCalled();
+    expect(contentIndex.syncBook).toHaveBeenCalledWith('book-1');
+  });
+
+  it('keeps the retry marker when indexing is cancelled and retries after restart', async () => {
+    const bookPath = path.join(tempDir, 'Book A');
+    await fs.outputFile(path.join(bookPath, '01-intro.md'), '# Intro');
+    const controller = new AbortController();
+    let indexPending = false;
+
+    prisma.book.upsert.mockImplementation(() =>
+      Promise.resolve({
+        id: 'book-1',
+        indexPending,
+        indexRevision: indexPending ? 1 : 0,
+      }),
+    );
+    prisma.book.update.mockImplementation(() => {
+      indexPending = true;
+      return Promise.resolve({});
+    });
+    prisma.chapter.create.mockResolvedValue({ id: 'chapter-1' });
+    contentIndex.syncBook.mockImplementationOnce(() => {
+      controller.abort();
+      return Promise.reject(new Error('index cancelled'));
+    });
+
+    await expect(
+      service.scanDirectory(tempDir, { signal: controller.signal }),
+    ).rejects.toThrow('index cancelled');
+    expect(indexPending).toBe(true);
+
+    prisma.chapter.findUnique.mockResolvedValue({
+      id: 'chapter-1',
+      title: 'intro',
+      orderIndex: 0,
+      content: '# Intro',
+      updatedAt: new Date('2026-08-09T00:00:00.000Z'),
+    });
+    contentIndex.syncBook.mockResolvedValueOnce(undefined);
+    const restartedService = new ScanService(
+      prisma as never,
+      contentIndex as never,
+    );
+
+    await restartedService.scanDirectory(tempDir);
+
+    expect(contentIndex.syncBook).toHaveBeenCalledTimes(2);
+    expect(contentIndex.syncBook).toHaveBeenLastCalledWith('book-1');
   });
 
   it('rejects paths that are not directories', async () => {

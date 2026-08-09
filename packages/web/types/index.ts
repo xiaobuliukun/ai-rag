@@ -9,6 +9,7 @@ export type {
   AiChatResponse,
   AiChatHistoryMessage,
   AiChatStreamEvent,
+  AiConfigUpdateRequest,
   AiContext,
   AiRuntimeConfig,
   AiSource,

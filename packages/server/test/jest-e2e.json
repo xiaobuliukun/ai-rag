@@ -4,6 +4,9 @@
   "testEnvironment": "node",
   "testRegex": ".e2e-spec.ts$",
   "watchman": false,
+  "moduleNameMapper": {
+    "^@moxu/shared$": "<rootDir>/../../shared/src"
+  },
   "transform": {
     "^.+\\.(t|j)s$": "ts-jest"
   }

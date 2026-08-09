@@ -5,13 +5,21 @@ const path = require("node:path");
 const test = require("node:test");
 
 const {
+  configureSessionPermissions,
   createLocalCorsOrigins,
+  createSecureWebPreferences,
   createServerEnvironment,
   createWebEnvironment,
   findStandaloneServer,
+  isAllowedAppNavigation,
+  isAllowedExternalUrl,
   loadOrCreateDesktopSecret,
+  normalizeExternalUrl,
+  normalizeUpdateChannel,
+  normalizeUpdateUrl,
   parsePort,
   readAdditionalArgument,
+  resolveUpdateConfiguration,
   toPrismaFileUrl,
 } = require("../src/runtime.cjs");
 
@@ -152,4 +160,166 @@ test("finds the monorepo standalone entry and reads preload arguments", () => {
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
+});
+
+test("allows only browser-safe protocols for external URLs", () => {
+  assert.equal(isAllowedExternalUrl("https://example.com/guide"), true);
+  assert.equal(isAllowedExternalUrl("http://example.com/guide"), true);
+  assert.equal(isAllowedExternalUrl("mailto:hello@example.com"), true);
+  assert.equal(isAllowedExternalUrl("file:///etc/passwd"), false);
+  assert.equal(isAllowedExternalUrl("javascript:alert(1)"), false);
+  assert.equal(isAllowedExternalUrl("data:text/html,hello"), false);
+  assert.equal(isAllowedExternalUrl("not a URL"), false);
+  assert.equal(
+    normalizeExternalUrl(" HTTPS://Example.com/guide "),
+    "https://example.com/guide",
+  );
+});
+
+test("allows renderer navigation only within the desktop web origin", () => {
+  const applicationUrl = "http://127.0.0.1:4300";
+
+  assert.equal(
+    isAllowedAppNavigation(
+      "http://127.0.0.1:4300/library?book=1#chapter",
+      applicationUrl,
+    ),
+    true,
+  );
+  assert.equal(
+    isAllowedAppNavigation("http://localhost:4300/library", applicationUrl),
+    false,
+  );
+  assert.equal(
+    isAllowedAppNavigation("https://example.com/library", applicationUrl),
+    false,
+  );
+  assert.equal(
+    isAllowedAppNavigation(
+      "blob:http://127.0.0.1:4300/8a28a896-6ebc-4a12-991e-21091cb792df",
+      applicationUrl,
+    ),
+    false,
+  );
+  assert.equal(isAllowedAppNavigation("not a URL", applicationUrl), false);
+});
+
+test("installs deny-by-default session permission handlers", () => {
+  let checkHandler;
+  let requestHandler;
+  let deviceHandler;
+  const targetSession = {
+    setPermissionCheckHandler(handler) {
+      checkHandler = handler;
+    },
+    setPermissionRequestHandler(handler) {
+      requestHandler = handler;
+    },
+    setDevicePermissionHandler(handler) {
+      deviceHandler = handler;
+    },
+  };
+
+  configureSessionPermissions(targetSession);
+
+  assert.equal(checkHandler(null, "geolocation", "http://127.0.0.1"), false);
+  assert.equal(deviceHandler({ deviceType: "usb" }), false);
+
+  let granted = true;
+  requestHandler(null, "notifications", (allowed) => {
+    granted = allowed;
+  });
+  assert.equal(granted, false);
+});
+
+test("creates sandboxed renderer preferences for the local desktop app", () => {
+  assert.deepEqual(
+    createSecureWebPreferences({
+      preloadPath: "/app/preload.cjs",
+      apiBaseUrl: "http://127.0.0.1:4311/api",
+    }),
+    {
+      preload: "/app/preload.cjs",
+      additionalArguments: [
+        "--moxu-api-base-url=http://127.0.0.1:4311/api",
+      ],
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  );
+});
+
+test("uses packaged updater metadata without requiring a runtime URL", () => {
+  const resourcesPath = path.join(path.sep, "Applications", "Moxu", "resources");
+  const configuration = resolveUpdateConfiguration({
+    isPackaged: true,
+    resourcesPath,
+    fileExists: (candidate) =>
+      candidate === path.join(resourcesPath, "app-update.yml"),
+  });
+
+  assert.equal(configuration.enabled, true);
+  assert.equal(configuration.source, "packaged");
+  assert.equal(configuration.feed, undefined);
+  assert.equal(
+    configuration.packagedConfigurationPath,
+    path.join(resourcesPath, "app-update.yml"),
+  );
+});
+
+test("supports a secure generic updater override and channel", () => {
+  const configuration = resolveUpdateConfiguration({
+    isPackaged: true,
+    baseEnvironment: {
+      UPDATE_URL: " https://updates.example.com/moxu ",
+      UPDATE_CHANNEL: "beta",
+    },
+    resourcesPath: "/unused",
+    fileExists: () => false,
+  });
+
+  assert.equal(configuration.enabled, true);
+  assert.equal(configuration.source, "environment");
+  assert.deepEqual(configuration.feed, {
+    provider: "generic",
+    url: "https://updates.example.com/moxu",
+    channel: "beta",
+  });
+  assert.equal(configuration.channel, "beta");
+});
+
+test("keeps updates disabled when neither packaged metadata nor an override exists", () => {
+  const configuration = resolveUpdateConfiguration({
+    isPackaged: true,
+    resourcesPath: "/missing",
+    fileExists: () => false,
+  });
+
+  assert.equal(configuration.enabled, false);
+  assert.equal(configuration.source, "none");
+});
+
+test("rejects unsafe update URL and channel configuration", () => {
+  assert.equal(normalizeUpdateUrl("http://127.0.0.1:8080/updates"), "http://127.0.0.1:8080/updates");
+  assert.equal(normalizeUpdateChannel(" stable-1 "), "stable-1");
+  assert.throws(
+    () => normalizeUpdateUrl("http://updates.example.com/moxu"),
+    /HTTPS/,
+  );
+  assert.throws(
+    () => normalizeUpdateUrl("https://user:secret@example.com/moxu"),
+    /credentials/,
+  );
+  assert.throws(() => normalizeUpdateChannel("../beta"), /UPDATE_CHANNEL/);
+  assert.throws(
+    () =>
+      resolveUpdateConfiguration({
+        isPackaged: true,
+        baseEnvironment: { UPDATE_CHANNEL: "beta" },
+        resourcesPath: "/missing",
+        fileExists: () => false,
+      }),
+    /requires UPDATE_URL/,
+  );
 });

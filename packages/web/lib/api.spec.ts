@@ -1,4 +1,9 @@
-import { createApiHeaders, getApiAccessToken } from './api';
+import { REPLACE_BACKUP_CONFIRMATION } from '@moxu/shared';
+import {
+  createApiHeaders,
+  getApiAccessToken,
+  importBackup,
+} from './api';
 
 describe('API access token headers', () => {
   const originalToken = process.env.NEXT_PUBLIC_API_ACCESS_TOKEN;
@@ -38,5 +43,46 @@ describe('API access token headers', () => {
         'Authorization',
       ),
     ).toBe('Bearer per-request');
+  });
+
+  it('includes the explicit confirmation token for replace imports', async () => {
+    const fetchSpy = jest.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          indexPending: false,
+          message: 'Imported',
+          booksImported: 0,
+          chaptersImported: 0,
+          bookmarksImported: 0,
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      ),
+    );
+
+    try {
+      await importBackup(
+        {
+          version: 1,
+          exportedAt: '2026-08-09T00:00:00.000Z',
+          books: [],
+          bookmarks: [],
+        },
+        'replace',
+      );
+
+      const requestBody = JSON.parse(
+        String(fetchSpy.mock.calls[0]?.[1]?.body),
+      );
+      expect(requestBody).toMatchObject({
+        mode: 'replace',
+        replaceConfirmation: REPLACE_BACKUP_CONFIRMATION,
+      });
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 });

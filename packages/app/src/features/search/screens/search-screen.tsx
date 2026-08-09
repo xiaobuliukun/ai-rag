@@ -14,7 +14,7 @@ import { useAppSettings } from "@/application/settings/settings-provider";
 import { AppText, Button, Card, Field, Screen, SectionHeader } from "@/design-system/ui/primitives";
 import { createMoxuApi } from "@/infrastructure/api/moxu-api";
 
-const searchTypes: Array<{ value: SearchResultType; label: string }> = [
+const searchTypes: { value: SearchResultType; label: string }[] = [
   { value: "all", label: "全部" },
   { value: "book", label: "书籍" },
   { value: "chapter", label: "章节" },
@@ -38,8 +38,6 @@ export function SearchScreen() {
   useEffect(() => {
     const keyword = query.trim();
     if (!keyword) {
-      setResults([]);
-      setError(null);
       return;
     }
 
@@ -101,7 +99,14 @@ export function SearchScreen() {
             <Search color={colors.muted} size={18} />
             <Field
               value={query}
-              onChangeText={setQuery}
+              onChangeText={(value) => {
+                setQuery(value);
+                if (!value.trim()) {
+                  setResults([]);
+                  setError(null);
+                  setIsLoading(false);
+                }
+              }}
               placeholder="输入关键词"
               autoCapitalize="none"
               autoCorrect={false}
