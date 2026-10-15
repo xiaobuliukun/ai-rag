@@ -178,6 +178,11 @@ async function main() {
     await app.evaluate((_electron, { name, reply }) => { globalThis.desktopE2e[name].push(reply); }, { name, reply });
   }
   async function navigate(route, title) {
+    const sidebar = page.locator("aside.atelier-sidebar");
+    const sidebarOpen = await sidebar.evaluate(element => !element.classList.contains("-translate-x-full"));
+    if (!sidebarOpen) {
+      await page.getByRole("button", { name: "Toggle navigation", exact: true }).click();
+    }
     await page.locator('a[href="#' + route + '"]').first().click();
     await page.getByRole("heading", { name: title, exact: true }).waitFor();
   }
