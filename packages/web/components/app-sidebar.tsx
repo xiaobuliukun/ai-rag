@@ -28,7 +28,7 @@ const treeExitTransition = { duration: 0.16, ease: [0.22, 1, 0.36, 1] } as const
 export function AppSidebar() {
   const { t } = useI18n();
   const pathname = usePathname();
-  const { isSidebarOpen } = useStore();
+  const { isSidebarOpen, closeSidebar } = useStore();
   const shouldReduceMotion = useReducedMotion();
   const [books, setBooks] = React.useState<Book[]>([]);
   const [expandedBooks, setExpandedBooks] = React.useState<string[]>([]);
@@ -65,6 +65,12 @@ export function AppSidebar() {
     );
   };
 
+  const closeOnCompactNavigation = () => {
+    if (window.matchMedia("(max-width: 1023px)").matches) {
+      closeSidebar();
+    }
+  };
+
   return (
     <aside
       aria-hidden={!isSidebarOpen}
@@ -94,6 +100,7 @@ export function AppSidebar() {
       <nav className="flex shrink-0 flex-col gap-1 px-3 py-4" aria-label="Main navigation">
         <Link
           href="/"
+          onClick={closeOnCompactNavigation}
           className={cn(
             "sidebar-nav-link",
             pathname === "/" && "is-active",
@@ -104,6 +111,7 @@ export function AppSidebar() {
         </Link>
         <Link
           href="/search"
+          onClick={closeOnCompactNavigation}
           className={cn(
             "sidebar-nav-link",
             pathname === "/search" && "is-active",
@@ -114,6 +122,7 @@ export function AppSidebar() {
         </Link>
         <Link
           href="/management"
+          onClick={closeOnCompactNavigation}
           className={cn(
             "sidebar-nav-link",
             pathname === "/management" && "is-active",
@@ -124,6 +133,7 @@ export function AppSidebar() {
         </Link>
         <Link
           href="/settings"
+          onClick={closeOnCompactNavigation}
           className={cn(
             "sidebar-nav-link",
             pathname === "/settings" && "is-active",
