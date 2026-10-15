@@ -62,6 +62,8 @@ graph TD
 
 * **动画**: framer-motion
 
+桌面端使用独立的 Electron 原生运行链路：主进程加载 `packages/desktop/dist/renderer` 中的静态 React 页面，preload 只暴露动态 API 地址以及文件对话框和确认对话框等 Electron 原生能力。主进程应用 Prisma migration 后，以 `ELECTRON_RUN_AS_NODE=1` 的子进程启动 Nest HTTP 服务，服务只绑定 `127.0.0.1` 的动态端口；renderer 通过 `/api` Controller 调用书库、扫描、搜索、AI、备份、书签和资源接口，AI 流式问答使用 SSE。Web 与移动端继续通过同一套 Nest HTTP API 访问业务服务。
+
 ## 3. 路由定义
 
 | 路由                             | 用途             |

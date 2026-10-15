@@ -250,7 +250,7 @@ export function ManagementView() {
   };
 
   const handleDeleteBook = async () => {
-    if (!selectedBook || !window.confirm(t("management.deleteConfirm"))) {
+    if (!selectedBook || !(await confirmDesktop(t("management.deleteConfirm")))) {
       return;
     }
 
@@ -273,10 +273,11 @@ export function ManagementView() {
 
     try {
       const payload = await createCurrentBackup();
-      downloadBackupPayload(
+      const saved = await downloadBackupPayload(
         payload,
         `moxu-backup-${new Date().toISOString().slice(0, 10)}.json`,
       );
+      if (!saved) return;
       setStatus(t("management.exported"));
     } catch (err) {
       setError(err instanceof Error ? err.message : t("management.exportFailed"));
@@ -306,17 +307,20 @@ export function ManagementView() {
         mode: importMode,
         payload,
         confirmInitialReplace: () =>
-          window.confirm(t("management.importReplaceWarning")),
+          confirmDesktop(t("management.importReplaceWarning")),
         createRecoveryBackup: createCurrentBackup,
-        downloadRecoveryBackup: (recoveryPayload) => {
-          downloadBackupPayload(
+        downloadRecoveryBackup: async (recoveryPayload) => {
+          const saved = await downloadBackupPayload(
             recoveryPayload,
             `moxu-before-replace-${formatBackupTimestamp(new Date())}.json`,
           );
+          if (!saved) {
+            throw new Error("Recovery backup save was cancelled");
+          }
           setStatus(t("management.importReplaceRecoveryDownloaded"));
         },
         confirmFinalReplace: () =>
-          window.confirm(t("management.importReplaceFinalConfirm")),
+          confirmDesktop(t("management.importReplaceFinalConfirm")),
         importPayload: importBackup,
         applyImportedPayload: (importedPayload) =>
           applyClientPreferences(importedPayload.clientPreferences, setTheme),
@@ -910,7 +914,16 @@ async function createCurrentBackup(): Promise<BackupPayload> {
   };
 }
 
-function downloadBackupPayload(payload: BackupPayload, fileName: string) {
+async function downloadBackupPayload(
+  payload: BackupPayload,
+  fileName: string,
+): Promise<boolean> {
+  const desktopBridge = getDesktopBridge();
+  if (desktopBridge?.saveBackup) {
+    const result = await desktopBridge.saveBackup(payload, fileName);
+    return !result.canceled;
+  }
+
   const blob = new Blob([JSON.stringify(payload, null, 2)], {
     type: "application/json",
   });
@@ -924,6 +937,36 @@ function downloadBackupPayload(payload: BackupPayload, fileName: string) {
   } finally {
     URL.revokeObjectURL(url);
   }
+  return true;
+}
+
+type DesktopBridge = {
+  saveBackup?: (
+    payload: BackupPayload,
+    filename?: string,
+  ) => Promise<{ canceled: boolean; filePath?: string }>;
+  chooseBackup?: () => Promise<BackupPayload | null>;
+  confirm?: (message: string) => Promise<boolean>;
+};
+
+function getDesktopBridge() {
+  if (typeof window === "undefined") {
+    return undefined;
+  }
+
+  const bridge = (window as Window & { moxuDesktop?: DesktopBridge })
+    .moxuDesktop;
+  return bridge &&
+    (bridge.saveBackup || bridge.chooseBackup || bridge.confirm)
+    ? bridge
+    : undefined;
+}
+
+function confirmDesktop(message: string) {
+  return (
+    getDesktopBridge()?.confirm?.(message) ??
+    Promise.resolve(window.confirm(message))
+  );
 }
 
 function formatBackupTimestamp(date: Date) {

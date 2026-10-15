@@ -12,7 +12,7 @@
 - 语义检索：默认本地 hash embedding，可配置 OpenAI-compatible `/embeddings`。
 - AI 问答：默认本地抽取式回答，可配置 OpenAI-compatible `/chat/completions`。
 - 数据备份：导出/导入书籍、章节、进度、书签、AI/RAG 配置和前端阅读偏好。
-- 多端入口：Web、Electron 桌面端、Expo React Native 移动端共享同一套本地 API。
+- 多端入口：Web、Electron 桌面端和 Expo React Native 共用 NestJS HTTP API；桌面端的窗口和原生能力由 Electron 提供。
 - 本地安全：API 默认监听 `127.0.0.1`，并默认拒绝非本机 Host。
 
 ## Monorepo 结构
@@ -289,7 +289,15 @@ packages/app/src/
 
 ## 桌面端
 
-桌面端位于 `packages/desktop`。Electron 壳会先应用 Prisma migration，再启动本地 API 和 Next standalone Web 服务，默认在窗口中打开 `http://127.0.0.1:3000`。可用 `MOXU_WEB_PORT` 和 `MOXU_API_PORT` 修改端口；两者必须不同且启动前会检查占用，自定义 Web 端口会自动加入本地 CORS 来源。自动化 smoke 可用绝对路径 `MOXU_USER_DATA_DIR` 隔离数据库、扫描任务和本地密钥。
+桌面端位于 `packages/desktop`，使用原生 Electron 主进程、preload 和本地静态 React renderer，不再启动 Next.js Web 服务。启动时 Electron 先应用 Prisma migration，再以子进程启动 NestJS HTTP API；Nest 会监听动态 loopback 端口，renderer 通过 `http://127.0.0.1:<port>/api` 调用与 Web、移动端相同的 Controller。preload 只暴露 API 地址和文件选择、保存、确认等 Electron 原生能力，窗口启用 context isolation、sandbox 和禁用 Node 集成。
+
+开发启动会先构建 shared、server 和 renderer，再准备与 Electron ABI 匹配的 better-sqlite3 运行时：
+
+```bash
+npm run desktop:dev
+```
+
+桌面数据默认保存在开发目录 `.moxu/desktop-user-data`，打包版本使用 Electron 的 userData 目录；可用绝对路径 `MOXU_USER_DATA_DIR` 覆盖。桌面 Nest 服务仅绑定 `127.0.0.1`，关闭 Electron 时会一起退出。
 
 常用产物：
 

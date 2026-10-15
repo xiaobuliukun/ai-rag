@@ -6,25 +6,12 @@ const DESKTOP_SECRET_FILE = "ai-config-secret";
 const ALLOWED_EXTERNAL_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
 const UPDATE_CHANNEL_PATTERN = /^[a-z0-9][a-z0-9._-]{0,31}$/i;
 
-function parsePort(value, fallback, name) {
-  const normalized = value == null || value === "" ? fallback : Number(value);
-
-  if (!Number.isInteger(normalized) || normalized < 1 || normalized > 65_535) {
-    throw new Error(`${name} must be an integer between 1 and 65535`);
-  }
-
-  return normalized;
-}
-
 function toPrismaFileUrl(filePath) {
   return `file:${path.resolve(filePath).replaceAll("\\", "/")}`;
 }
 
-function createServerEnvironment({
-  baseEnvironment,
-  host,
-  apiPort,
-  webPort,
+function createDesktopBaseEnvironment({
+  baseEnvironment = {},
   userDataPath,
   aiConfigSecret,
 }) {
@@ -37,14 +24,7 @@ function createServerEnvironment({
   return {
     ...baseEnvironment,
     NODE_ENV: "production",
-    HOST: host,
-    PORT: String(apiPort),
-    NEXT_TELEMETRY_DISABLED: "1",
     ALLOW_REMOTE_API: "false",
-    CORS_ORIGINS:
-      baseEnvironment.CORS_ORIGINS ||
-      baseEnvironment.CORS_ORIGIN ||
-      createLocalCorsOrigins(host, webPort),
     PRISMA_HIDE_UPDATE_MESSAGE: "1",
     ...(serverSecret ? { AI_CONFIG_SECRET: serverSecret } : {}),
     DATABASE_URL:
@@ -54,6 +34,61 @@ function createServerEnvironment({
       baseEnvironment.SCAN_JOBS_FILE ||
       path.join(userDataPath, "scan-jobs.json"),
   };
+}
+
+/**
+ * Environment for the local Nest HTTP process used by the Electron desktop
+ * client. The API is loopback-only and binds an ephemeral port by default so
+ * it cannot collide with a separately running web server.
+ */
+function createDesktopServerEnvironment({
+  baseEnvironment = {},
+  userDataPath,
+  aiConfigSecret,
+  host = "127.0.0.1",
+  port = 0,
+}) {
+  const configuredPort = Number(baseEnvironment.MOXU_API_PORT);
+  const selectedPort =
+    Number.isInteger(configuredPort) &&
+    configuredPort >= 0 &&
+    configuredPort <= 65_535
+      ? configuredPort
+      : port;
+  const environment = createDesktopBaseEnvironment({
+    baseEnvironment,
+    userDataPath,
+    aiConfigSecret,
+  });
+
+  return {
+    ...environment,
+    // child_process.fork inherits Electron's executable in packaged and dev
+    // desktop runs. This flag makes that executable run the Nest entrypoint
+    // as a Node process instead of opening another Electron app instance.
+    ELECTRON_RUN_AS_NODE: "1",
+    HOST: host,
+    PORT: String(selectedPort),
+    // A file:// renderer sends Origin: null. Keeping this scoped to the
+    // desktop process allows that origin while the regular web server keeps
+    // its existing allow-list.
+    CORS_ORIGINS: "null",
+  };
+}
+
+function resolveUserDataPath({
+  baseEnvironment = process.env,
+  projectRoot,
+  isPackaged,
+}) {
+  const configured = baseEnvironment.MOXU_USER_DATA_DIR?.trim();
+  if (configured) {
+    return path.resolve(configured);
+  }
+  if (!isPackaged && projectRoot) {
+    return path.join(projectRoot, ".moxu", "desktop-user-data");
+  }
+  return undefined;
 }
 
 function loadOrCreateDesktopSecret(userDataPath) {
@@ -110,53 +145,6 @@ function readDesktopSecret(secretPath) {
   return secret;
 }
 
-function createLocalCorsOrigins(host, webPort) {
-  return Array.from(new Set([host, "127.0.0.1", "localhost"]))
-    .map((hostname) => `http://${hostname}:${webPort}`)
-    .join(",");
-}
-
-function createWebEnvironment({
-  baseEnvironment,
-  host,
-  webPort,
-  apiPort,
-}) {
-  return {
-    ...baseEnvironment,
-    NODE_ENV: "production",
-    HOST: host,
-    HOSTNAME: host,
-    PORT: String(webPort),
-    MOXU_API_HOST: host,
-    MOXU_API_PORT: String(apiPort),
-    NEXT_TELEMETRY_DISABLED: "1",
-    NEXT_PUBLIC_API_BASE_URL: `http://${host}:${apiPort}/api`,
-  };
-}
-
-function findStandaloneServer(runtimeRoot) {
-  const candidates = [
-    path.join(runtimeRoot, "web", "packages", "web", "server.js"),
-    path.join(runtimeRoot, "web", "server.js"),
-  ];
-  const entry = candidates.find((candidate) => fs.existsSync(candidate));
-
-  if (!entry) {
-    throw new Error(
-      `Next.js standalone server was not found. Checked: ${candidates.join(", ")}`,
-    );
-  }
-
-  return entry;
-}
-
-function readAdditionalArgument(argv, name) {
-  const prefix = `--${name}=`;
-  const argument = argv.find((value) => value.startsWith(prefix));
-  return argument ? argument.slice(prefix.length) : undefined;
-}
-
 function normalizeExternalUrl(value) {
   try {
     const externalUrl = new URL(value);
@@ -176,6 +164,13 @@ function isAllowedAppNavigation(value, applicationUrl) {
   try {
     const targetUrl = new URL(value);
     const localUrl = new URL(applicationUrl);
+    if (localUrl.protocol === "file:") {
+      return (
+        targetUrl.protocol === "file:" &&
+        targetUrl.host === localUrl.host &&
+        targetUrl.pathname === localUrl.pathname
+      );
+    }
     return (
       targetUrl.protocol === localUrl.protocol &&
       targetUrl.origin === localUrl.origin
@@ -204,10 +199,9 @@ function configureSessionPermissions(targetSession) {
   }
 }
 
-function createSecureWebPreferences({ preloadPath, apiBaseUrl }) {
+function createSecureWebPreferences({ preloadPath }) {
   return {
     preload: preloadPath,
-    additionalArguments: [`--moxu-api-base-url=${apiBaseUrl}`],
     contextIsolation: true,
     nodeIntegration: false,
     sandbox: true,
@@ -320,19 +314,16 @@ function resolveUpdateConfiguration({
 
 module.exports = {
   configureSessionPermissions,
-  createLocalCorsOrigins,
+  createDesktopServerEnvironment,
+  createDesktopBaseEnvironment,
   createSecureWebPreferences,
-  createServerEnvironment,
-  createWebEnvironment,
-  findStandaloneServer,
   isAllowedAppNavigation,
   isAllowedExternalUrl,
   loadOrCreateDesktopSecret,
   normalizeExternalUrl,
   normalizeUpdateChannel,
   normalizeUpdateUrl,
-  parsePort,
-  readAdditionalArgument,
+  resolveUserDataPath,
   resolveUpdateConfiguration,
   toPrismaFileUrl,
 };

@@ -114,14 +114,17 @@ test("beforePack waits for isolated runtime preparation", async () => {
   assert.equal(settled, true);
 });
 
-test("packages standalone web dependencies as a separate resource", () => {
-  assert.ok(
-    desktopPackage.build.extraResources.some(
-      (resource) =>
-        resource.from === "../../.moxu/desktop-runtime/web/node_modules" &&
-        resource.to === "runtime/web/node_modules",
+test("does not package a Next.js web runtime", () => {
+  assert.equal(
+    desktopPackage.build.extraResources.some((resource) =>
+      String(resource.from).includes("desktop-runtime/web"),
     ),
+    false,
   );
+});
+
+test("packages the static native renderer", () => {
+  assert.ok(desktopPackage.build.files.includes("dist/renderer/**/*"));
 });
 
 test("afterPack rejects an incomplete desktop runtime", async () => {
@@ -159,8 +162,6 @@ test("afterPack rejects an incomplete desktop runtime", async () => {
       "dist",
       "index.js",
     ),
-    path.join(runtimeRoot, "web", "packages", "web", "server.js"),
-    path.join(runtimeRoot, "web", "node_modules", "next", "package.json"),
   ];
 
   try {
@@ -178,8 +179,6 @@ test("afterPack rejects an incomplete desktop runtime", async () => {
     );
     fs.writeFileSync(sharedPackagePath, "fixture");
 
-    fs.rmSync(requiredFiles.at(-1));
-    await assert.rejects(() => afterPack(context), /runtime is incomplete.*next/s);
   } finally {
     fs.rmSync(appOutDir, { recursive: true, force: true });
   }

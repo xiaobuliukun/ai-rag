@@ -34,7 +34,6 @@ async function prepareRuntime(options = {}) {
       copyPrismaClient();
       copyServerOutput();
       copySharedOutput();
-      copyWebStandaloneOutput();
       writeRuntimePackage(electronVersion, targetPlatform, targetArch);
       await rebuildNativeDependencies(electronVersion, targetPlatform, targetArch);
       validateRuntime(electronVersion, targetPlatform, targetArch);
@@ -75,8 +74,6 @@ function assertBuildOutputs() {
     path.join(projectRoot, "packages", "server", "prisma", "schema.prisma"),
     path.join(projectRoot, "packages", "server", "prisma.config.ts"),
     path.join(projectRoot, "packages", "shared", "dist", "index.js"),
-    path.join(projectRoot, "packages", "web", ".next", "standalone"),
-    path.join(projectRoot, "packages", "web", ".next", "static"),
   ];
   const missingPaths = requiredPaths.filter((filePath) => !fs.existsSync(filePath));
 
@@ -194,44 +191,6 @@ function copySharedOutput() {
     path.join(sharedRoot, "package.json"),
     path.join(destination, "package.json"),
   );
-}
-
-function copyWebStandaloneOutput() {
-  const webRoot = path.join(projectRoot, "packages", "web");
-  const standaloneSource = path.join(webRoot, ".next", "standalone");
-  const standaloneDestination = path.join(runtimeRoot, "web");
-
-  fs.cpSync(standaloneSource, standaloneDestination, {
-    recursive: true,
-    dereference: true,
-  });
-
-  const monorepoEntry = path.join(
-    standaloneDestination,
-    "packages",
-    "web",
-    "server.js",
-  );
-  const appDestination = fs.existsSync(monorepoEntry)
-    ? path.dirname(monorepoEntry)
-    : standaloneDestination;
-
-  if (!fs.existsSync(path.join(appDestination, "server.js"))) {
-    throw new Error("Next.js standalone output does not contain server.js");
-  }
-
-  fs.cpSync(
-    path.join(webRoot, ".next", "static"),
-    path.join(appDestination, ".next", "static"),
-    { recursive: true },
-  );
-
-  const publicSource = path.join(webRoot, "public");
-  if (fs.existsSync(publicSource)) {
-    fs.cpSync(publicSource, path.join(appDestination, "public"), {
-      recursive: true,
-    });
-  }
 }
 
 function writeRuntimePackage(electronVersion, platform, arch) {

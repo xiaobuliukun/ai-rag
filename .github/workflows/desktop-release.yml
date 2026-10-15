@@ -91,9 +91,7 @@ jobs:
         run: npm run test -w packages/desktop
 
       - name: Build embedded services
-        run: |
-          npm run build:server
-          npm run build:web
+        run: npm run build:desktop
 
       - name: Build signed and notarized macOS package
         if: matrix.platform == 'mac'

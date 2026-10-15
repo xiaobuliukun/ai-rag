@@ -6,47 +6,18 @@ const test = require("node:test");
 
 const {
   configureSessionPermissions,
-  createLocalCorsOrigins,
+  createDesktopServerEnvironment,
+  createDesktopBaseEnvironment,
   createSecureWebPreferences,
-  createServerEnvironment,
-  createWebEnvironment,
-  findStandaloneServer,
   isAllowedAppNavigation,
   isAllowedExternalUrl,
   loadOrCreateDesktopSecret,
   normalizeExternalUrl,
   normalizeUpdateChannel,
   normalizeUpdateUrl,
-  parsePort,
-  readAdditionalArgument,
+  resolveUserDataPath,
   resolveUpdateConfiguration,
-  toPrismaFileUrl,
 } = require("../src/runtime.cjs");
-
-test("creates one packaged database URL for the server and migrations", () => {
-  const userDataPath = path.join(path.sep, "tmp", "Moxu Data");
-  const environment = createServerEnvironment({
-    baseEnvironment: {},
-    host: "127.0.0.1",
-    apiPort: 4311,
-    webPort: 4300,
-    userDataPath,
-  });
-
-  assert.equal(
-    environment.DATABASE_URL,
-    toPrismaFileUrl(path.join(userDataPath, "moxu.db")),
-  );
-  assert.equal(environment.PORT, "4311");
-  assert.equal(
-    environment.CORS_ORIGINS,
-    "http://127.0.0.1:4300,http://localhost:4300",
-  );
-  assert.equal(
-    environment.SCAN_JOBS_FILE,
-    path.join(userDataPath, "scan-jobs.json"),
-  );
-});
 
 test("creates and reuses a protected desktop AI config secret", () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "moxu-secret-"));
@@ -67,99 +38,71 @@ test("creates and reuses a protected desktop AI config secret", () => {
   }
 });
 
-test("injects a desktop AI config secret without replacing an explicit one", () => {
-  const generated = createServerEnvironment({
+test("creates an isolated desktop environment before the HTTP listener starts", () => {
+  const environment = createDesktopBaseEnvironment({
     baseEnvironment: {},
-    host: "127.0.0.1",
-    apiPort: 4311,
-    webPort: 4300,
-    userDataPath: "/tmp/moxu",
-    aiConfigSecret: "generated-desktop-secret-1234567890",
-  });
-  const explicit = createServerEnvironment({
-    baseEnvironment: {
-      AI_CONFIG_SECRET: "explicit-environment-secret-1234567890",
-    },
-    host: "127.0.0.1",
-    apiPort: 4311,
-    webPort: 4300,
-    userDataPath: "/tmp/moxu",
+    userDataPath: "/tmp/moxu-user-data",
     aiConfigSecret: "generated-desktop-secret-1234567890",
   });
 
+  assert.equal(environment.NODE_ENV, "production");
+  assert.equal(environment.ALLOW_REMOTE_API, "false");
+  assert.equal(environment.AI_CONFIG_SECRET, "generated-desktop-secret-1234567890");
+  assert.equal(environment.DATABASE_URL, "file:/tmp/moxu-user-data/moxu.db");
   assert.equal(
-    generated.AI_CONFIG_SECRET,
-    "generated-desktop-secret-1234567890",
+    environment.SCAN_JOBS_FILE,
+    "/tmp/moxu-user-data/scan-jobs.json",
   );
-  assert.equal(
-    explicit.AI_CONFIG_SECRET,
-    "explicit-environment-secret-1234567890",
-  );
+  assert.equal(environment.PORT, undefined);
 });
 
-test("preserves an explicit database URL in the shared server environment", () => {
-  const environment = createServerEnvironment({
-    baseEnvironment: { DATABASE_URL: "file:/custom/library.db" },
-    host: "127.0.0.1",
-    apiPort: 3001,
-    webPort: 3000,
-    userDataPath: "/ignored",
-  });
-
-  assert.equal(environment.DATABASE_URL, "file:/custom/library.db");
-});
-
-test("builds local CORS origins for a custom desktop web port", () => {
-  assert.equal(
-    createLocalCorsOrigins("127.0.0.1", 4320),
-    "http://127.0.0.1:4320,http://localhost:4320",
-  );
-});
-
-test("keeps standalone web and API ports separate", () => {
-  const environment = createWebEnvironment({
+test("creates a loopback Nest server environment for Electron", () => {
+  const environment = createDesktopServerEnvironment({
     baseEnvironment: {},
-    host: "127.0.0.1",
-    webPort: 4300,
-    apiPort: 4311,
+    userDataPath: "/tmp/moxu-user-data",
+    aiConfigSecret: "generated-desktop-secret-1234567890",
   });
 
-  assert.equal(environment.PORT, "4300");
-  assert.equal(environment.HOSTNAME, "127.0.0.1");
-  assert.equal(environment.MOXU_API_PORT, "4311");
+  assert.equal(environment.HOST, "127.0.0.1");
+  assert.equal(environment.PORT, "0");
+  assert.equal(environment.CORS_ORIGINS, "null");
+  assert.equal(environment.ELECTRON_RUN_AS_NODE, "1");
+});
+
+test("honors an explicit desktop API port while defaulting to ephemeral", () => {
+  const environment = createDesktopServerEnvironment({
+    baseEnvironment: { MOXU_API_PORT: "43123" },
+    userDataPath: "/tmp/moxu-user-data",
+  });
+
+  assert.equal(environment.PORT, "43123");
+});
+
+test("isolates development user data while preserving an explicit override", () => {
   assert.equal(
-    environment.NEXT_PUBLIC_API_BASE_URL,
-    "http://127.0.0.1:4311/api",
+    resolveUserDataPath({
+      baseEnvironment: {},
+      projectRoot: "/workspace/ai-rag",
+      isPackaged: false,
+    }),
+    "/workspace/ai-rag/.moxu/desktop-user-data",
   );
-});
-
-test("validates configured service ports", () => {
-  assert.equal(parsePort(undefined, 3000, "MOXU_WEB_PORT"), 3000);
-  assert.equal(parsePort("4311", 3001, "MOXU_API_PORT"), 4311);
-  assert.throws(
-    () => parsePort("not-a-port", 3001, "MOXU_API_PORT"),
-    /MOXU_API_PORT/,
+  assert.equal(
+    resolveUserDataPath({
+      baseEnvironment: { MOXU_USER_DATA_DIR: "~/moxu" },
+      projectRoot: "/workspace/ai-rag",
+      isPackaged: false,
+    }),
+    path.resolve("~/moxu"),
   );
-});
-
-test("finds the monorepo standalone entry and reads preload arguments", () => {
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "moxu-desktop-"));
-  const entry = path.join(tempRoot, "web", "packages", "web", "server.js");
-  fs.mkdirSync(path.dirname(entry), { recursive: true });
-  fs.writeFileSync(entry, "");
-
-  try {
-    assert.equal(findStandaloneServer(tempRoot), entry);
-    assert.equal(
-      readAdditionalArgument(
-        ["electron", "--moxu-api-base-url=http://127.0.0.1:4311/api"],
-        "moxu-api-base-url",
-      ),
-      "http://127.0.0.1:4311/api",
-    );
-  } finally {
-    fs.rmSync(tempRoot, { recursive: true, force: true });
-  }
+  assert.equal(
+    resolveUserDataPath({
+      baseEnvironment: {},
+      projectRoot: "/workspace/ai-rag",
+      isPackaged: true,
+    }),
+    undefined,
+  );
 });
 
 test("allows only browser-safe protocols for external URLs", () => {
@@ -176,32 +119,23 @@ test("allows only browser-safe protocols for external URLs", () => {
   );
 });
 
-test("allows renderer navigation only within the desktop web origin", () => {
-  const applicationUrl = "http://127.0.0.1:4300";
-
+test("allows only the renderer entry file for file navigation", () => {
+  const applicationUrl = "file:///Applications/Moxu.app/Contents/Resources/app/dist/renderer/index.html";
   assert.equal(
     isAllowedAppNavigation(
-      "http://127.0.0.1:4300/library?book=1#chapter",
+      `${applicationUrl}#/book/1/2`,
       applicationUrl,
     ),
     true,
   );
   assert.equal(
-    isAllowedAppNavigation("http://localhost:4300/library", applicationUrl),
-    false,
-  );
-  assert.equal(
-    isAllowedAppNavigation("https://example.com/library", applicationUrl),
-    false,
-  );
-  assert.equal(
     isAllowedAppNavigation(
-      "blob:http://127.0.0.1:4300/8a28a896-6ebc-4a12-991e-21091cb792df",
+      "file:///Applications/Moxu.app/Contents/Resources/app/other.html",
       applicationUrl,
     ),
     false,
   );
-  assert.equal(isAllowedAppNavigation("not a URL", applicationUrl), false);
+  assert.equal(isAllowedAppNavigation("file:///etc/passwd", applicationUrl), false);
 });
 
 test("installs deny-by-default session permission handlers", () => {
@@ -232,17 +166,11 @@ test("installs deny-by-default session permission handlers", () => {
   assert.equal(granted, false);
 });
 
-test("creates sandboxed renderer preferences for the local desktop app", () => {
+test("does not inject an HTTP API URL into the native renderer", () => {
   assert.deepEqual(
-    createSecureWebPreferences({
-      preloadPath: "/app/preload.cjs",
-      apiBaseUrl: "http://127.0.0.1:4311/api",
-    }),
+    createSecureWebPreferences({ preloadPath: "/app/preload.cjs" }),
     {
       preload: "/app/preload.cjs",
-      additionalArguments: [
-        "--moxu-api-base-url=http://127.0.0.1:4311/api",
-      ],
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
