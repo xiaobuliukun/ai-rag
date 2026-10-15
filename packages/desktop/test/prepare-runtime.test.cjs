@@ -63,10 +63,9 @@ test("limits native rebuild discovery to the isolated runtime", () => {
 });
 
 test("Linux builds default to Clang and preserve explicit compiler settings", () => {
-  assert.deepEqual(nativeCompilerEnvironment("linux", {}), {
-    CC: "clang",
-    CXX: "clang++",
-  });
+  const defaults = nativeCompilerEnvironment("linux", {});
+  assert.match(defaults.CC, /^clang(?:-(?:18|19))?$/);
+  assert.match(defaults.CXX, /^clang\+\+(?:-(?:18|19))?$/);
   assert.deepEqual(
     nativeCompilerEnvironment("linux", { CC: "cc", CXX: "c++" }),
     { CC: "cc", CXX: "c++" },

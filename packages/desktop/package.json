@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Electron desktop client for Moxu",
+  "desktopName": "moxu-desktop",
   "main": "src/main.cjs",
   "author": "xiaobuliukun <xiaobuliukun@gmail.com>",
   "homepage": "https://github.com/xiaobuliukun/ai-rag",
@@ -124,12 +125,14 @@
     },
     "linux": {
       "category": "Education",
+      "executableName": "moxu-desktop",
       "icon": "build/icon.png",
       "maintainer": "xiaobuliukun <xiaobuliukun@gmail.com>",
       "target": [
         "AppImage",
         "deb"
       ],
+      "syncDesktopName": true,
       "artifactName": "Moxu-${version}-${arch}.${ext}"
     }
   }

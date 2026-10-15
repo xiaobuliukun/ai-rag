@@ -79,7 +79,7 @@ jobs:
             runner: ubuntu-24.04
             platform: linux
             arch: x64
-            executable: ../../release/desktop/linux-unpacked/@moxudesktop
+            executable: ../../release/desktop/linux-unpacked/moxu-desktop
 
     steps:
       - name: Check out repository

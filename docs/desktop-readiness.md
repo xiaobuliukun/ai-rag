@@ -14,6 +14,12 @@
 
 所有目标要求均满足后才能将“达到可发布状态”标记完成；已接入的检查和未运行的检查不能视为通过。
 
+## 远程检查记录
+
+提交 `546bcdb` 的 [GitHub CI 运行 38726409766](https://github.com/xiaobuliukun/ai-rag/actions/runs/38726409766) 已结束：Node / npm 设置、依赖安装和 Linux Clang 安装成功，`audit:policy` 步骤失败，完整验证和 Electron E2E 被跳过。当前可读取的 job 元数据证明失败位置；日志下载返回 403，未据此断言远程报告中的具体公告数量。
+
+后续本地调整让 CI 在安装成功且未取消时继续收集验证结果，同时保持审计失败状态；该调整尚未在远程运行。`desktop-smoke` 四平台工作流也尚未触发。
+
 ## 已实现
 
 - 书库和管理页的原生目录选择；管理页的原生备份导入、导出、确认和封面图片选择。
@@ -23,6 +29,7 @@
 - Nest 异常退出后提供“重启服务 / 退出应用”；恢复时强制刷新当前路由，使 preload 取得新端口。退出时等待服务结束，超时强制终止。
 - 增加真实 Electron 流程测试和 CI / 原生平台发布流程中的测试入口；发布流程还会启动实际打包的应用验证内置资源、首次迁移和退出清理。
 - 增加独立 `desktop-smoke` 工作流：相关 PR 和手动运行均可在四个平台构建未签名应用并运行 E2E / 成品启动检查；只使用读取权限，无需发布凭据。正式发布仍必须通过依赖审计与签名检查。
+- CI 的审计失败仍使工作流失败；在安装和编译器准备成功且任务未取消时，继续运行完整验证，成功后再运行 Electron E2E，避免审计失败遮蔽桌面回归结果。
 - 运行时准备脚本通过 Node 执行当前 npm CLI，避免 Windows 直接启动 `npm.cmd` 失败，并保持 npm 版本一致。含空格和 `&` 的 CLI 路径已有真实子进程回归验证。
 - Linux 原生模块重建默认采用系统 Clang，并保留显式 `CC` / `CXX` 配置；构建后恢复调用进程的编译器环境。Linux CI 增加编译器安装步骤。
 - Electron 升至 43.7.11，Nest 升至 11.2.7，Next / eslint-config-next 升至 16.3.8，并更新可兼容的安全补丁依赖。
@@ -54,6 +61,7 @@ Linux x64（Docker `node:24.19.0-bookworm`，x86_64 模拟运行）：
 
 - 使用干净 npm 11.21.0 安装，安装 Clang 19 后完成 better-sqlite3 的 Electron ABI 重建；GCC 和 Clang 14 的失败结果已作为构建约束记录。
 - Prisma 迁移、未签名 Linux unpacked 应用、无头 Electron E2E 和 `test:packaged` 均通过；测试覆盖扫描、阅读、备份、搜索、AI SSE、Nest 恢复、CSP 和退出清理。
+- 使用合法的 `moxu-desktop` 可执行文件名完成未签名 AppImage 与 deb 构建；两种产物生成后再次运行 packaged smoke 通过。electron-builder 的 Linux 桌面入口元数据已设置 `desktopName` 与 `syncDesktopName`，避免窗口关联警告。
 - 容器使用非 root 用户与 Xvfb，并配置 `seccomp=unconfined` 允许 Chromium 创建命名空间；Electron 的 sandbox、Node 隔离和 CSP 保持启用，未使用 `--no-sandbox`。这些结果不代表宿主系统的默认沙箱配置已验收。
 - 该容器验证覆盖 Linux x64 的代码路径；GitHub Ubuntu runner 仍需实际运行，Linux 安装器、签名和发行包下载验收仍待执行。
 

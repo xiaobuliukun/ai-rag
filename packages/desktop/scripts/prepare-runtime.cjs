@@ -259,10 +259,37 @@ function nativeCompilerEnvironment(platform, environment = process.env) {
   if (platform !== "linux") return {};
   // GCC rejects attribute placement in Electron 43's V8 headers. Use the
   // system Clang while preserving an explicitly configured compiler pair.
+  if (environment.CC || environment.CXX) {
+    return {
+      CC: environment.CC || "clang",
+      CXX: environment.CXX || "clang++",
+    };
+  }
+
+  for (const [cc, cxx] of [
+    ["clang-19", "clang++-19"],
+    ["clang-18", "clang++-18"],
+    ["clang", "clang++"],
+  ]) {
+    if (compilerMajorVersion(cc) >= 18 && compilerMajorVersion(cxx) >= 18) {
+      return { CC: cc, CXX: cxx };
+    }
+  }
+
   return {
-    CC: environment.CC || "clang",
-    CXX: environment.CXX || "clang++",
+    CC: "clang",
+    CXX: "clang++",
   };
+}
+
+function compilerMajorVersion(command) {
+  const result = spawnSync(command, ["--version"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.error || result.status !== 0) return 0;
+  const match = String(result.stdout).match(/clang version (\d+)|Apple clang version (\d+)/i);
+  return Number(match?.[1] || match?.[2] || 0);
 }
 
 async function rebuildNativeDependencies(electronVersion, platform, arch) {
