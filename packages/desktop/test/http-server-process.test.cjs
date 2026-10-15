@@ -61,10 +61,40 @@ test("rejects a server that reports an invalid bound port", async () => {
   });
 
   await assert.rejects(server.start(), /invalid port/i);
-  assert.equal(child.killed, true);
+  assert.equal(child.killed, "SIGKILL");
 });
 
 test("formats IPv6 loopback URLs safely", () => {
   assert.equal(formatHost("::1"), "[::1]");
   assert.equal(formatHost("127.0.0.1"), "127.0.0.1");
+});
+
+test("force-kills a Nest child that ignores graceful shutdown", async () => {
+  const child = new FakeServerProcess();
+  const signals = [];
+  child.kill = (signal) => {
+    signals.push(signal);
+    if (signal === "SIGKILL") {
+      child.signalCode = signal;
+      queueMicrotask(() => child.emit("exit", null, signal));
+    }
+  };
+  const server = new HttpServerProcess({
+    fork: () => {
+      queueMicrotask(() => child.emit("message", { ready: true, port: 43123 }));
+      return child;
+    },
+    shutdownTimeoutMs: 10,
+  });
+  // Real child handles keep the event loop alive; this fake needs a handle too.
+  const keepAlive = setInterval(() => {}, 100);
+  try {
+    await server.start();
+    await server.shutdown();
+    assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+    assert.equal(server.ready, false);
+    assert.equal(server.process, undefined);
+  } finally {
+    clearInterval(keepAlive);
+  }
 });

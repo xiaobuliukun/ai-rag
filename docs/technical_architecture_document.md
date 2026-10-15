@@ -3,6 +3,8 @@
 ```mermaid
 graph TD
     A[用户浏览器] --> B[Next.js 16 App Router]
+    U[Electron 主进程] --> V[静态 React Renderer]
+    V --> N
     B --> N[NestJS API]
     N --> C[Prisma ORM]
     N --> D[本地文件系统]
@@ -11,6 +13,8 @@ graph TD
     
     subgraph "前端层"
         B
+        U
+        V
     end
     
     subgraph "数据层"
@@ -62,7 +66,7 @@ graph TD
 
 * **动画**: framer-motion
 
-桌面端使用独立的 Electron 原生运行链路：主进程加载 `packages/desktop/dist/renderer` 中的静态 React 页面，preload 只暴露动态 API 地址以及文件对话框和确认对话框等 Electron 原生能力。主进程应用 Prisma migration 后，以 `ELECTRON_RUN_AS_NODE=1` 的子进程启动 Nest HTTP 服务，服务只绑定 `127.0.0.1` 的动态端口；renderer 通过 `/api` Controller 调用书库、扫描、搜索、AI、备份、书签和资源接口，AI 流式问答使用 SSE。Web 与移动端继续通过同一套 Nest HTTP API 访问业务服务。
+桌面端使用独立的 Electron 原生运行链路：主进程加载 `packages/desktop/dist/renderer` 中的静态 React 页面，preload 只暴露动态 API 地址以及目录、备份、封面图片和确认对话框等 Electron 原生能力。主进程应用 Prisma migration 后，以 `ELECTRON_RUN_AS_NODE=1` 的子进程启动 Nest HTTP 服务，服务只绑定 `127.0.0.1` 的动态端口；renderer 通过受限 CSP 允许的 loopback `/api` Controller 调用书库、扫描、搜索、AI、备份、书签和资源接口，AI 流式问答使用 SSE。Nest 子进程异常退出时，主进程提供服务重启并重新加载 renderer 的恢复路径。Web 与移动端继续通过同一套 Nest HTTP API 访问业务服务。
 
 ## 3. 路由定义
 

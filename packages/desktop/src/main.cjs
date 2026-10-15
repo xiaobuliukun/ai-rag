@@ -19,6 +19,7 @@ const {
   configureSessionPermissions,
   createDesktopServerEnvironment,
   createSecureWebPreferences,
+  readDesktopImageSelection,
   isAllowedAppNavigation,
   loadOrCreateDesktopSecret,
   normalizeExternalUrl,
@@ -30,11 +31,13 @@ const API_BASE_URL_CHANNEL = "moxu:api-base-url";
 const SELECT_DIRECTORY_CHANNEL = "moxu:select-directory";
 const SAVE_BACKUP_CHANNEL = "moxu:save-backup";
 const CHOOSE_BACKUP_CHANNEL = "moxu:choose-backup";
+const CHOOSE_IMAGE_CHANNEL = "moxu:choose-image";
 const CONFIRM_CHANNEL = "moxu:confirm";
 let mainWindow;
 let tray;
 let serverProcess;
 let isQuitting = false;
+let servicesStopped = false;
 let servicesReady = false;
 let ipcRegistered = false;
 let updateConfiguration = {
@@ -42,6 +45,8 @@ let updateConfiguration = {
   source: "uninitialized",
 };
 let updateConfigurationError;
+let serviceErrorDialogOpen = false;
+let serviceRestartInProgress = false;
 
 app.setName("墨序");
 const configuredUserDataPath = resolveUserDataPath({
@@ -71,6 +76,7 @@ app.whenReady()
     configureAutoUpdater();
     registerIpcHandlers();
     await startServices();
+    if (isQuitting) return;
     createTray();
     createWindow();
     void loadWhenReady();
@@ -78,9 +84,15 @@ app.whenReady()
   })
   .catch(handleStartupFailure);
 
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
+  if (servicesStopped) return;
+  event.preventDefault();
+  if (isQuitting) return;
   isQuitting = true;
-  stopServices();
+  void stopServices().finally(() => {
+    servicesStopped = true;
+    app.quit();
+  });
 });
 
 app.on("window-all-closed", () => {
@@ -213,8 +225,9 @@ async function startServices() {
   });
 
   await migrateDatabase(serverEnvironment);
+  if (isQuitting) return;
 
-  serverProcess = new HttpServerProcess({
+  const server = new HttpServerProcess({
     fork,
     modulePath: serverEntryPath(),
     cwd: desktopRuntimeRoot(),
@@ -222,23 +235,27 @@ async function startServices() {
     host: serverEnvironment.HOST,
     port: Number(serverEnvironment.PORT),
   });
-  await serverProcess.start();
-  attachServerLifecycle(serverProcess);
+  serverProcess = server;
+  const ready = server.start();
+  attachServerLifecycle(server);
+  await ready;
+  if (isQuitting) return;
+  if (!server.ready) throw new Error("Nest API exited during startup");
   servicesReady = true;
 }
 
 function attachServerLifecycle(server) {
-  server.process?.on("exit", (...args) => {
-    const [first, second, third] = args;
-    const code = typeof first === "number" ? first : second;
-    const signal = typeof first === "string" ? first : third;
-    if (!isQuitting && servicesReady) {
-      showServiceError("Nest API", code, signal);
+  server.process?.on("exit", (code, signal) => {
+    if (!isQuitting && servicesReady && serverProcess === server) {
+      servicesReady = false;
+      serverProcess = undefined;
+      if (!serviceRestartInProgress) showServiceError("Nest API", code, signal);
     }
   });
   server.process?.on("error", (error) => {
-    if (!isQuitting && servicesReady) {
-      showServiceError("Nest API", undefined, error.message);
+    if (!isQuitting && servicesReady && serverProcess === server) {
+      servicesReady = false;
+      if (!serviceRestartInProgress) showServiceError("Nest API", undefined, error.message);
     }
   });
 }
@@ -296,6 +313,23 @@ function registerIpcHandlers() {
     });
     if (result.canceled || !result.filePaths[0]) return null;
     return JSON.parse(fs.readFileSync(result.filePaths[0], "utf8"));
+  });
+
+  ipcMain.handle(CHOOSE_IMAGE_CHANNEL, async (event) => {
+    assertTrustedRenderer(event);
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ["openFile"],
+      filters: [
+        {
+          name: "Images",
+          extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp"],
+        },
+      ],
+    });
+    const filePath = result.filePaths[0];
+    if (result.canceled || !filePath) return null;
+
+    return readDesktopImageSelection(filePath);
   });
 
   ipcMain.handle(CONFIRM_CHANNEL, async (event, message) => {
@@ -445,13 +479,83 @@ function showMainWindow() {
   mainWindow.focus();
 }
 
-function stopServices() {
+async function stopServices() {
   servicesReady = false;
   const server = serverProcess;
   serverProcess = undefined;
   if (server) {
-    void server.shutdown().catch(() => server.kill());
+    await server.shutdown().catch(() => server.kill());
   }
+}
+
+async function restartServices() {
+  if (isQuitting || serviceRestartInProgress) {
+    return;
+  }
+
+  serviceRestartInProgress = true;
+  const previousServer = serverProcess;
+  serverProcess = undefined;
+  servicesReady = false;
+
+  try {
+    if (previousServer) {
+      await previousServer.shutdown();
+    }
+    if (isQuitting) return;
+    await startServices();
+    if (!isQuitting && mainWindow && !mainWindow.isDestroyed()) {
+      // loadURL with the same file/hash can be a same-document navigation.
+      // A full reload is required to rerun preload with the new Nest port.
+      await reloadRenderer(mainWindow.webContents);
+    }
+    if (!isQuitting && (!servicesReady || !serverProcess?.ready)) {
+      throw new Error("Nest API exited while restoring the window");
+    }
+  } catch (error) {
+    if (isQuitting) return;
+    console.error("[desktop] service restart failed", error);
+    const options = {
+      type: "error",
+      message: "墨序服务重启失败",
+      detail: error instanceof Error ? error.message : String(error),
+    };
+    try {
+      await (mainWindow
+        ? dialog.showMessageBox(mainWindow, options)
+        : dialog.showMessageBox(options));
+    } finally {
+      app.quit();
+    }
+  } finally {
+    serviceRestartInProgress = false;
+  }
+}
+
+function reloadRenderer(contents) {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      contents.removeListener("did-finish-load", loaded);
+      contents.removeListener("did-fail-load", failed);
+      contents.removeListener("destroyed", destroyed);
+    };
+    const loaded = () => { cleanup(); resolve(); };
+    const failed = (_event, code, description, _url, isMainFrame) => {
+      if (!isMainFrame) return;
+      cleanup();
+      reject(new Error(`Renderer reload failed (${code}): ${description}`));
+    };
+    const destroyed = () => { cleanup(); resolve(); };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error("Renderer reload timed out"));
+    }, 30_000);
+    contents.once("did-finish-load", loaded);
+    contents.on("did-fail-load", failed);
+    contents.once("destroyed", destroyed);
+    contents.reload();
+  });
 }
 
 function configureAutoUpdater() {
@@ -563,20 +667,39 @@ function openExternalUrl(url) {
 }
 
 function showServiceError(name, code, signal) {
+  if (serviceErrorDialogOpen || isQuitting) {
+    return;
+  }
+
+  serviceErrorDialogOpen = true;
   const options = {
     type: "error",
     message: "墨序服务已退出",
-    detail: `${name} exited with ${signal || code}. Please restart the app.`,
+    detail: `${name} 已停止（${signal || `退出码 ${code ?? "未知"}`}）。重启服务后将刷新当前页面，尚未保存的编辑需要重新填写。`,
+    buttons: ["重启服务", "退出应用"],
+    defaultId: 0,
+    cancelId: 1,
   };
 
   void (mainWindow
     ? dialog.showMessageBox(mainWindow, options)
-    : dialog.showMessageBox(options));
+    : dialog.showMessageBox(options))
+    .then(({ response }) => {
+      serviceErrorDialogOpen = false;
+      if (response === 0) {
+        return restartServices();
+      }
+      app.quit();
+    })
+    .catch(() => app.quit())
+    .finally(() => {
+      serviceErrorDialogOpen = false;
+    });
 }
 
 async function handleStartupFailure(error) {
   isQuitting = true;
-  stopServices();
+  await stopServices();
   const detail = error instanceof Error ? error.message : String(error);
   console.error("[desktop] startup failed", error);
 

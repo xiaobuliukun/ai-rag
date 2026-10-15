@@ -1,0 +1,5 @@
+@import "../../web/app/globals.css";
+
+/* Shared React components live outside the desktop workspace's scan root. */
+@source "../../web/components";
+@source "./src";

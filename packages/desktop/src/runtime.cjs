@@ -5,6 +5,77 @@ const { randomBytes } = require("node:crypto");
 const DESKTOP_SECRET_FILE = "ai-config-secret";
 const ALLOWED_EXTERNAL_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
 const UPDATE_CHANNEL_PATTERN = /^[a-z0-9][a-z0-9._-]{0,31}$/i;
+const MAX_DESKTOP_IMAGE_SIZE = 1_500_000;
+const DESKTOP_IMAGE_MIME_TYPES = Object.freeze({
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".bmp": "image/bmp",
+});
+
+async function readDesktopImageSelection(filePath) {
+  const extension = path.extname(filePath).toLowerCase();
+  const mimeType = DESKTOP_IMAGE_MIME_TYPES[extension];
+  if (!mimeType) {
+    throw new Error("请选择 PNG、JPEG、GIF、WebP 或 BMP 图片");
+  }
+
+  const handle = await fs.promises.open(filePath, "r");
+  let buffer;
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) throw new Error("请选择图片文件");
+    if (stat.size > MAX_DESKTOP_IMAGE_SIZE) {
+      throw new Error("封面图片不能超过 1.5 MB");
+    }
+    // Bound allocation even if the file grows after stat().
+    const storage = Buffer.alloc(MAX_DESKTOP_IMAGE_SIZE + 1);
+    let length = 0;
+    while (length < storage.length) {
+      const { bytesRead } = await handle.read(storage, length, storage.length - length, null);
+      if (!bytesRead) break;
+      length += bytesRead;
+    }
+    if (length > MAX_DESKTOP_IMAGE_SIZE) throw new Error("封面图片不能超过 1.5 MB");
+    buffer = storage.subarray(0, length);
+  } finally {
+    await handle.close();
+  }
+  if (detectDesktopImageMimeType(buffer) !== mimeType) {
+    throw new Error("图片内容与文件类型不匹配");
+  }
+
+  return {
+    dataUrl: `data:${mimeType};base64,${buffer.toString("base64")}`,
+    fileName: path.basename(filePath),
+    mimeType,
+    size: buffer.byteLength,
+  };
+}
+
+function detectDesktopImageMimeType(buffer) {
+  if (buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
+    return "image/png";
+  }
+  if (buffer.subarray(0, 3).equals(Buffer.from([255, 216, 255]))) {
+    return "image/jpeg";
+  }
+  if (buffer.subarray(0, 4).toString("ascii") === "GIF8") {
+    return "image/gif";
+  }
+  if (
+    buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
+    buffer.subarray(8, 12).toString("ascii") === "WEBP"
+  ) {
+    return "image/webp";
+  }
+  if (buffer.subarray(0, 2).toString("ascii") === "BM") {
+    return "image/bmp";
+  }
+  return undefined;
+}
 
 function toPrismaFileUrl(filePath) {
   return `file:${path.resolve(filePath).replaceAll("\\", "/")}`;
@@ -325,5 +396,6 @@ module.exports = {
   normalizeUpdateUrl,
   resolveUserDataPath,
   resolveUpdateConfiguration,
+  readDesktopImageSelection,
   toPrismaFileUrl,
 };

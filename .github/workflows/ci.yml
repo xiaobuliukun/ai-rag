@@ -19,11 +19,20 @@ jobs:
           node-version: 24.19.0
           cache: npm
 
+      - name: Set up npm
+        run: npm install --global npm@11.21.0
+
       - name: Install dependencies
         run: npm ci
+
+      - name: Install Linux native compiler
+        run: sudo apt-get update && sudo apt-get install --yes clang
 
       - name: Enforce dependency audit policy
         run: npm run audit:policy
 
       - name: Verify project
         run: npm run verify
+
+      - name: Exercise Electron desktop workflows
+        run: xvfb-run -a npm run test:e2e -w packages/desktop

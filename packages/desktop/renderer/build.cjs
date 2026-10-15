@@ -7,7 +7,6 @@ const config = require("./webpack.config.cjs");
 
 const rendererRoot = __dirname;
 const outputRoot = path.join(rendererRoot, "..", "dist", "renderer");
-const projectRoot = path.resolve(rendererRoot, "../..");
 
 async function main() {
   fs.mkdirSync(outputRoot, { recursive: true });
@@ -39,7 +38,7 @@ function buildJavaScript() {
 }
 
 async function buildStyles() {
-  const sourcePath = path.join(projectRoot, "web", "app", "globals.css");
+  const sourcePath = path.join(rendererRoot, "styles.css");
   const source = fs.readFileSync(sourcePath, "utf8");
   const result = await postcss([tailwind()]).process(source, {
     from: sourcePath,

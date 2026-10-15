@@ -23,11 +23,6 @@ import {
 } from "@/types";
 import { REPLACE_BACKUP_CONFIRMATION } from "@moxu/shared";
 
-type MoxuDesktopBridge = {
-  apiBaseUrl?: string;
-  apiAccessToken?: string;
-};
-
 /**
  * Read a build/runtime environment value without assuming that Node's global
  * `process` exists. The desktop renderer runs in a sandboxed browser context
@@ -58,8 +53,7 @@ function getDesktopApiBaseUrl() {
     return undefined;
   }
 
-  return (window as Window & { moxuDesktop?: MoxuDesktopBridge }).moxuDesktop
-    ?.apiBaseUrl;
+  return window.moxuDesktop?.apiBaseUrl;
 }
 
 export function getApiBaseUrl() {
@@ -82,9 +76,7 @@ export function getApiBaseUrl() {
 
 export function getApiAccessToken() {
   if (typeof window !== "undefined") {
-    const desktopToken = (
-      window as Window & { moxuDesktop?: MoxuDesktopBridge }
-    ).moxuDesktop?.apiAccessToken;
+    const desktopToken = window.moxuDesktop?.apiAccessToken;
     if (desktopToken?.trim()) {
       return desktopToken.trim();
     }

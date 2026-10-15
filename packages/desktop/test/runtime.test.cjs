@@ -12,6 +12,7 @@ const {
   isAllowedAppNavigation,
   isAllowedExternalUrl,
   loadOrCreateDesktopSecret,
+  readDesktopImageSelection,
   normalizeExternalUrl,
   normalizeUpdateChannel,
   normalizeUpdateUrl,
@@ -48,10 +49,10 @@ test("creates an isolated desktop environment before the HTTP listener starts", 
   assert.equal(environment.NODE_ENV, "production");
   assert.equal(environment.ALLOW_REMOTE_API, "false");
   assert.equal(environment.AI_CONFIG_SECRET, "generated-desktop-secret-1234567890");
-  assert.equal(environment.DATABASE_URL, "file:/tmp/moxu-user-data/moxu.db");
+  assert.equal(environment.DATABASE_URL, "file:" + path.resolve("/tmp/moxu-user-data/moxu.db").replaceAll("\\", "/"));
   assert.equal(
     environment.SCAN_JOBS_FILE,
-    "/tmp/moxu-user-data/scan-jobs.json",
+    path.join("/tmp/moxu-user-data", "scan-jobs.json"),
   );
   assert.equal(environment.PORT, undefined);
 });
@@ -67,6 +68,31 @@ test("creates a loopback Nest server environment for Electron", () => {
   assert.equal(environment.PORT, "0");
   assert.equal(environment.CORS_ORIGINS, "null");
   assert.equal(environment.ELECTRON_RUN_AS_NODE, "1");
+});
+
+test("reads covers and rejects oversized, disguised, and unsupported files", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "moxu-cover-"));
+  try {
+    const png = path.join(root, "cover.PNG");
+    fs.copyFileSync(path.join(__dirname, "../build/icon.png"), png);
+    const bytes = fs.readFileSync(png);
+    const selection = await readDesktopImageSelection(png);
+    assert.equal(selection.fileName, "cover.PNG");
+    assert.equal(selection.mimeType, "image/png");
+    assert.equal(selection.size, bytes.length);
+    assert.deepEqual(Buffer.from(selection.dataUrl.split(",")[1], "base64"), bytes);
+
+    const large = path.join(root, "large.jpg");
+    fs.writeFileSync(large, Buffer.alloc(1_500_001));
+    await assert.rejects(readDesktopImageSelection(large), /1.5 MB/);
+    const disguised = path.join(root, "fake.jpg");
+    fs.writeFileSync(disguised, "<script>alert(1)</script>");
+    await assert.rejects(readDesktopImageSelection(disguised), /类型不匹配/);
+    await assert.rejects(readDesktopImageSelection(path.join(root, "cover.svg")), /PNG/);
+    await assert.rejects(readDesktopImageSelection(path.join(root, "missing.png")), /ENOENT/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("honors an explicit desktop API port while defaulting to ephemeral", () => {
@@ -85,7 +111,7 @@ test("isolates development user data while preserving an explicit override", () 
       projectRoot: "/workspace/ai-rag",
       isPackaged: false,
     }),
-    "/workspace/ai-rag/.moxu/desktop-user-data",
+    path.join("/workspace/ai-rag", ".moxu", "desktop-user-data"),
   );
   assert.equal(
     resolveUserDataPath({

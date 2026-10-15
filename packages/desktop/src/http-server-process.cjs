@@ -169,7 +169,7 @@ class HttpServerProcess {
 
   kill() {
     try {
-      this.process?.kill?.();
+      this.process?.kill?.("SIGKILL");
     } catch {
       // The child may have exited between the startup/shutdown check and kill.
     }
