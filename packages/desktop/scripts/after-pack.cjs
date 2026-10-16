@@ -3,10 +3,6 @@ const path = require("node:path");
 
 module.exports = async function afterPack(context) {
   const runtimeRoot = packagedRuntimeRoot(context);
-  const standaloneCandidates = [
-    path.join(runtimeRoot, "web", "packages", "web", "server.js"),
-    path.join(runtimeRoot, "web", "server.js"),
-  ];
   const requiredPaths = [
     path.join(runtimeRoot, "package.json"),
     path.join(
@@ -33,12 +29,7 @@ module.exports = async function afterPack(context) {
       "dist",
       "index.js",
     ),
-    path.join(runtimeRoot, "web", "node_modules", "next", "package.json"),
   ];
-
-  if (!standaloneCandidates.some((candidate) => fs.existsSync(candidate))) {
-    requiredPaths.push(standaloneCandidates[0]);
-  }
 
   const missingPaths = requiredPaths.filter((filePath) => !fs.existsSync(filePath));
   if (missingPaths.length > 0) {

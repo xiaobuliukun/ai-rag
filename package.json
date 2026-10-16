@@ -2,6 +2,7 @@
   "name": "moxu",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "npm@11.21.0",
   "workspaces": [
     "packages/*"
   ],
@@ -18,12 +19,12 @@
     "build:web": "npm run build -w packages/web",
     "build:server": "npm run build -w packages/server",
     "desktop:dev": "npm run dev -w packages/desktop",
-    "desktop:pack": "npm run build && npm run pack -w packages/desktop",
-    "desktop:dist": "npm run build && npm run dist -w packages/desktop",
-    "desktop:dist:mac": "npm run build && npm run dist:mac -w packages/desktop",
-    "desktop:dist:mac:signed": "npm run build && npm run dist:mac:signed -w packages/desktop",
-    "desktop:dist:win": "npm run build:server && npm run build:web && npm run dist:win -w packages/desktop",
-    "desktop:dist:linux": "npm run build:server && npm run build:web && npm run dist:linux -w packages/desktop",
+    "desktop:pack": "npm run build:desktop && npm run pack -w packages/desktop",
+    "desktop:dist": "npm run build:desktop && npm run dist -w packages/desktop",
+    "desktop:dist:mac": "npm run build:desktop && npm run dist:mac -w packages/desktop",
+    "desktop:dist:mac:signed": "npm run build:desktop && npm run dist:mac:signed -w packages/desktop",
+    "desktop:dist:win": "npm run build:desktop && npm run dist:win -w packages/desktop",
+    "desktop:dist:linux": "npm run build:desktop && npm run dist:linux -w packages/desktop",
     "lint": "npm run lint --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
@@ -36,15 +37,25 @@
     "verify": "npm run test:all",
     "pretest:large": "npm run build:server",
     "test:large": "node scripts/large-library-smoke.mjs",
-    "clean": "rm -rf node_modules packages/*/node_modules packages/*/dist packages/web/.next"
+    "clean": "rm -rf node_modules packages/*/node_modules packages/*/dist packages/web/.next",
+    "build:desktop": "npm run build -w @moxu/shared && npm run build -w @moxu/server && npm run build -w @moxu/desktop",
+    "test:desktop:e2e": "npm run build:desktop && npm run prepare:runtime -w packages/desktop && npm run test:e2e -w packages/desktop"
   },
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=24.0.0",
+    "npm": ">=11.21.0"
   },
   "dependencies": {
     "rxjs": "^7.8.2"
   },
   "devDependencies": {
-    "js-yaml": "5.2.3"
+    "eslint-plugin-react-hooks": "7.0.1",
+    "js-yaml": "5.4.3"
+  },
+  "overrides": {
+    "deepmerge-ts": "8.0.2",
+    "mysql2": "3.24.6",
+    "postcss-selector-parser": "7.1.6",
+    "uuid": "11.1.1"
   }
 }

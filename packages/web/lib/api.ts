@@ -23,18 +23,37 @@ import {
 } from "@/types";
 import { REPLACE_BACKUP_CONFIRMATION } from "@moxu/shared";
 
-type MoxuDesktopBridge = {
-  apiBaseUrl?: string;
-  apiAccessToken?: string;
-};
+/**
+ * Read a build/runtime environment value without assuming that Node's global
+ * `process` exists. The desktop renderer runs in a sandboxed browser context
+ * where `process` is intentionally unavailable. Next.js still gets direct
+ * `process.env` access in its browser bundle, while the static Electron bundle
+ * safely takes the fallback when no process global was injected.
+ */
+function getEnvironmentValue(name: string) {
+  if (typeof process === "undefined") {
+    return undefined;
+  }
+
+  // Keep public values as direct property accesses so Next.js can inline them
+  // in its client bundle. The static Electron bundle still short-circuits on
+  // the `typeof process` guard above.
+  if (name === "NEXT_PUBLIC_API_BASE_URL") {
+    return process.env.NEXT_PUBLIC_API_BASE_URL;
+  }
+  if (name === "NEXT_PUBLIC_API_ACCESS_TOKEN") {
+    return process.env.NEXT_PUBLIC_API_ACCESS_TOKEN;
+  }
+
+  return process.env?.[name];
+}
 
 function getDesktopApiBaseUrl() {
   if (typeof window === "undefined") {
     return undefined;
   }
 
-  return (window as Window & { moxuDesktop?: MoxuDesktopBridge }).moxuDesktop
-    ?.apiBaseUrl;
+  return window.moxuDesktop?.apiBaseUrl;
 }
 
 export function getApiBaseUrl() {
@@ -43,25 +62,27 @@ export function getApiBaseUrl() {
     return desktopApiBaseUrl;
   }
 
-  if (typeof window === "undefined" && process.env.MOXU_API_PORT) {
-    const host = process.env.MOXU_API_HOST ?? "127.0.0.1";
-    return `http://${host}:${process.env.MOXU_API_PORT}/api`;
+  const apiPort = getEnvironmentValue("MOXU_API_PORT");
+  if (typeof window === "undefined" && apiPort) {
+    const host = getEnvironmentValue("MOXU_API_HOST") ?? "127.0.0.1";
+    return `http://${host}:${apiPort}/api`;
   }
 
-  return process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001/api";
+  return (
+    getEnvironmentValue("NEXT_PUBLIC_API_BASE_URL") ??
+    "http://localhost:3001/api"
+  );
 }
 
 export function getApiAccessToken() {
   if (typeof window !== "undefined") {
-    const desktopToken = (
-      window as Window & { moxuDesktop?: MoxuDesktopBridge }
-    ).moxuDesktop?.apiAccessToken;
+    const desktopToken = window.moxuDesktop?.apiAccessToken;
     if (desktopToken?.trim()) {
       return desktopToken.trim();
     }
   }
 
-  return process.env.NEXT_PUBLIC_API_ACCESS_TOKEN?.trim() ?? "";
+  return getEnvironmentValue("NEXT_PUBLIC_API_ACCESS_TOKEN")?.trim() ?? "";
 }
 
 export const API_BASE_URL = getApiBaseUrl();

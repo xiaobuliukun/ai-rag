@@ -138,6 +138,15 @@ export function LibraryView() {
     }
   };
 
+  const handleChooseDirectory = async () => {
+    try {
+      const directory = await window.moxuDesktop?.selectDirectory?.();
+      if (directory) setScanPath(directory);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("library.scanFailed"));
+    }
+  };
+
   const displayedReadingMinutes = stats
     ? stats.readingMinutes > 0
       ? stats.readingMinutes
@@ -243,18 +252,29 @@ export function LibraryView() {
                     className="h-8 w-full min-w-0 rounded-md bg-transparent pl-10 pr-3 text-sm outline-none"
                   />
                 </div>
-                <button
-                  type="submit"
-                  disabled={isScanning}
-                  className="inline-flex h-8 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {isScanning ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <RefreshCw className="h-4 w-4" />
+                <div className="flex gap-2">
+                  {typeof window !== "undefined" && window.moxuDesktop?.selectDirectory && (
+                    <button
+                      type="button"
+                      onClick={() => void handleChooseDirectory()}
+                      className="inline-flex h-8 items-center justify-center rounded-md border px-3 text-sm font-medium hover:bg-secondary"
+                    >
+                      {t("library.chooseDirectory")}
+                    </button>
                   )}
-                  <span>{isScanning ? t("library.scanning") : t("library.scan")}</span>
-                </button>
+                  <button
+                    type="submit"
+                    disabled={isScanning}
+                    className="inline-flex h-8 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {isScanning ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-4 w-4" />
+                    )}
+                    <span>{isScanning ? t("library.scanning") : t("library.scan")}</span>
+                  </button>
+                </div>
               </form>
             </div>
           </div>

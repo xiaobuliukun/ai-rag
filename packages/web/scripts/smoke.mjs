@@ -31,10 +31,12 @@ const server = spawn(
         process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://127.0.0.1:3001/api',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
+    detached: process.platform !== 'win32',
   },
 );
 
 let output = '';
+let shuttingDown = false;
 server.stdout.on('data', (chunk) => {
   output += chunk.toString();
 });
@@ -43,8 +45,21 @@ server.stderr.on('data', (chunk) => {
 });
 
 const shutdown = () => {
-  if (!server.killed) {
-    server.kill('SIGTERM');
+  if (shuttingDown || server.exitCode !== null) return;
+  shuttingDown = true;
+  if (process.platform === 'win32') {
+    const taskkill = spawn('taskkill', ['/pid', String(server.pid), '/t', '/f'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    taskkill.unref();
+    return;
+  }
+
+  try {
+    process.kill(-server.pid, 'SIGTERM');
+  } catch (error) {
+    if (error.code !== 'ESRCH') throw error;
   }
 };
 

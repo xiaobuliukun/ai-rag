@@ -7,46 +7,53 @@ const {
   shell,
   dialog,
   session,
+  ipcMain,
 } = require("electron");
 const { autoUpdater } = require("electron-updater");
-const { spawn } = require("node:child_process");
+const { fork, spawn } = require("node:child_process");
 const fs = require("node:fs");
-const net = require("node:net");
 const path = require("node:path");
+const { pathToFileURL } = require("node:url");
+const { HttpServerProcess } = require("./http-server-process.cjs");
 const {
   configureSessionPermissions,
-  createLocalCorsOrigins,
+  createDesktopServerEnvironment,
   createSecureWebPreferences,
-  createServerEnvironment,
-  createWebEnvironment,
-  findStandaloneServer,
+  readDesktopImageSelection,
   isAllowedAppNavigation,
   loadOrCreateDesktopSecret,
   normalizeExternalUrl,
-  parsePort,
   resolveUpdateConfiguration,
+  resolveUserDataPath,
 } = require("./runtime.cjs");
 
-const WEB_PORT = parsePort(process.env.MOXU_WEB_PORT, 3000, "MOXU_WEB_PORT");
-const API_PORT = parsePort(process.env.MOXU_API_PORT, 3001, "MOXU_API_PORT");
-const HOST = "127.0.0.1";
-const WEB_URL = `http://${HOST}:${WEB_PORT}`;
-const API_BASE_URL = `http://${HOST}:${API_PORT}/api`;
-
+const API_BASE_URL_CHANNEL = "moxu:api-base-url";
+const SELECT_DIRECTORY_CHANNEL = "moxu:select-directory";
+const SAVE_BACKUP_CHANNEL = "moxu:save-backup";
+const CHOOSE_BACKUP_CHANNEL = "moxu:choose-backup";
+const CHOOSE_IMAGE_CHANNEL = "moxu:choose-image";
+const CONFIRM_CHANNEL = "moxu:confirm";
 let mainWindow;
 let tray;
 let serverProcess;
-let webProcess;
 let isQuitting = false;
+let servicesStopped = false;
 let servicesReady = false;
+let ipcRegistered = false;
 let updateConfiguration = {
   enabled: false,
   source: "uninitialized",
 };
 let updateConfigurationError;
+let serviceErrorDialogOpen = false;
+let serviceRestartInProgress = false;
 
 app.setName("墨序");
-const configuredUserDataPath = process.env.MOXU_USER_DATA_DIR?.trim();
+const configuredUserDataPath = resolveUserDataPath({
+  baseEnvironment: process.env,
+  projectRoot: projectRoot(),
+  isPackaged: app.isPackaged,
+});
 if (configuredUserDataPath) {
   app.setPath("userData", path.resolve(configuredUserDataPath));
 }
@@ -63,19 +70,29 @@ app.on("second-instance", () => {
   showMainWindow();
 });
 
-app.whenReady().then(async () => {
-  configureSessionPermissions(session.defaultSession);
-  configureAutoUpdater();
-  await startServices();
-  createTray();
-  createWindow();
-  void loadWhenReady();
-  void checkForUpdatesIfConfigured();
-}).catch(handleStartupFailure);
+app.whenReady()
+  .then(async () => {
+    configureSessionPermissions(session.defaultSession);
+    configureAutoUpdater();
+    registerIpcHandlers();
+    await startServices();
+    if (isQuitting) return;
+    createTray();
+    createWindow();
+    void loadWhenReady();
+    void checkForUpdatesIfConfigured();
+  })
+  .catch(handleStartupFailure);
 
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
+  if (servicesStopped) return;
+  event.preventDefault();
+  if (isQuitting) return;
   isQuitting = true;
-  stopServices();
+  void stopServices().finally(() => {
+    servicesStopped = true;
+    app.quit();
+  });
 });
 
 app.on("window-all-closed", () => {
@@ -99,7 +116,6 @@ function createWindow() {
     show: false,
     webPreferences: createSecureWebPreferences({
       preloadPath: path.join(__dirname, "preload.cjs"),
-      apiBaseUrl: API_BASE_URL,
     }),
   });
 
@@ -122,7 +138,7 @@ function createWindow() {
 
   mainWindow.webContents.on("will-navigate", (event, legacyUrl) => {
     const targetUrl = event.url || legacyUrl;
-    if (isAllowedAppNavigation(targetUrl, WEB_URL)) {
+    if (isAllowedAppNavigation(targetUrl, rendererEntryUrl())) {
       return;
     }
 
@@ -198,141 +214,175 @@ function createTrayImage() {
 }
 
 async function startServices() {
-  if (WEB_PORT === API_PORT) {
-    throw new Error("MOXU_WEB_PORT and MOXU_API_PORT must use different ports.");
-  }
-  await Promise.all([
-    assertPortAvailable(WEB_PORT, "Web"),
-    assertPortAvailable(API_PORT, "API"),
-  ]);
-
-  const serverCommand = getServerCommand();
-
-  if (app.isPackaged) {
-    await migrateDatabase(serverCommand.env);
-  }
-
-  serverProcess = startProcess("server", serverCommand);
-  webProcess = startProcess("web", getWebCommand());
-
-  try {
-    await Promise.all([
-      waitForHttpService(
-        "API",
-        serverProcess,
-        API_BASE_URL + "/health",
-        45_000,
-        async (response) =>
-          response.ok && (await response.json())?.status === "ok",
-      ),
-      waitForHttpService(
-        "Web",
-        webProcess,
-        WEB_URL,
-        45_000,
-        async (response) => response.ok,
-      ),
-    ]);
-    servicesReady = true;
-  } catch (error) {
-    stopServices();
-    throw error;
-  }
-}
-
-function startProcess(name, command) {
-  const child = spawn(command.command, command.args, {
-    cwd: command.cwd,
-    env: command.env,
-    stdio: "pipe",
-    shell: !app.isPackaged && process.platform === "win32",
-  });
-
-  child.stdout.on("data", (chunk) => console.log(`[${name}] ${chunk}`.trimEnd()));
-  child.stderr.on("data", (chunk) => console.error(`[${name}] ${chunk}`.trimEnd()));
-  child.on("error", (error) => {
-    child.moxuStartupError = error;
-    if (!isQuitting && servicesReady) {
-      console.error(`[${name}] failed to start`, error);
-      showServiceError(name, undefined, error.message);
-    }
-  });
-  child.on("exit", (code, signal) => {
-    if (isQuitting) {
-      return;
-    }
-    console.error(`[${name}] exited ${signal || code}`);
-    if (servicesReady) {
-      showServiceError(name, code, signal);
-    }
-  });
-  return child;
-}
-
-function getServerCommand() {
-  if (!app.isPackaged) {
-    return {
-      command: "npm",
-      args: ["run", "dev:server"],
-      cwd: projectRoot(),
-      env: developmentServerEnvironment(),
-    };
-  }
-
   const userDataPath = app.getPath("userData");
+  fs.mkdirSync(userDataPath, { recursive: true });
   const configuredSecret = process.env.AI_CONFIG_SECRET?.trim();
+  const serverEnvironment = createDesktopServerEnvironment({
+    baseEnvironment: process.env,
+    userDataPath,
+    aiConfigSecret:
+      configuredSecret || loadOrCreateDesktopSecret(userDataPath),
+  });
 
-  return nodeCommand(path.join(appRoot(), "packages/server/dist/src/main.js"), [], {
-    cwd: appRoot(),
-    env: createServerEnvironment({
-      baseEnvironment: process.env,
-      host: HOST,
-      apiPort: API_PORT,
-      webPort: WEB_PORT,
-      userDataPath,
-      aiConfigSecret:
-        configuredSecret || loadOrCreateDesktopSecret(userDataPath),
-    }),
+  await migrateDatabase(serverEnvironment);
+  if (isQuitting) return;
+
+  const server = new HttpServerProcess({
+    fork,
+    modulePath: serverEntryPath(),
+    cwd: desktopRuntimeRoot(),
+    env: serverEnvironment,
+    host: serverEnvironment.HOST,
+    port: Number(serverEnvironment.PORT),
+  });
+  serverProcess = server;
+  const ready = server.start();
+  attachServerLifecycle(server);
+  await ready;
+  if (isQuitting) return;
+  if (!server.ready) throw new Error("Nest API exited during startup");
+  servicesReady = true;
+}
+
+function attachServerLifecycle(server) {
+  server.process?.on("exit", (code, signal) => {
+    if (!isQuitting && servicesReady && serverProcess === server) {
+      servicesReady = false;
+      serverProcess = undefined;
+      if (!serviceRestartInProgress) showServiceError("Nest API", code, signal);
+    }
+  });
+  server.process?.on("error", (error) => {
+    if (!isQuitting && servicesReady && serverProcess === server) {
+      servicesReady = false;
+      if (!serviceRestartInProgress) showServiceError("Nest API", undefined, error.message);
+    }
   });
 }
 
-function getWebCommand() {
-  if (!app.isPackaged) {
-    return {
-      command: "npm",
-      args: ["run", "dev:web"],
-      cwd: projectRoot(),
-      env: developmentWebEnvironment(),
-    };
-  }
+function registerIpcHandlers() {
+  if (ipcRegistered) return;
+  ipcRegistered = true;
 
-  const standaloneEntry = findStandaloneServer(appRoot());
-  return nodeCommand(standaloneEntry, [], {
-    cwd: path.dirname(standaloneEntry),
-    env: createWebEnvironment({
-      baseEnvironment: process.env,
-      host: HOST,
-      webPort: WEB_PORT,
-      apiPort: API_PORT,
-    }),
+  ipcMain.on(API_BASE_URL_CHANNEL, (event) => {
+    // This synchronous call is made by the preload before the document has
+    // finished navigating, so the frame URL may still be about:blank. The
+    // sender identity and main-frame check are sufficient here; the channel
+    // only returns the loopback URL selected for this window.
+    assertTrustedRendererSender(event);
+    event.returnValue = serverProcess?.baseUrl || "";
   });
+
+  ipcMain.handle(SELECT_DIRECTORY_CHANNEL, async (event) => {
+    assertTrustedRenderer(event);
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ["openDirectory", "createDirectory"],
+    });
+    return result.canceled ? null : result.filePaths[0] || null;
+  });
+
+  ipcMain.handle(SAVE_BACKUP_CHANNEL, async (event, value) => {
+    assertTrustedRenderer(event);
+    if (!value || typeof value !== "object") {
+      throw new TypeError("Backup payload is required");
+    }
+    const filename =
+      typeof value.filename === "string" && value.filename.trim()
+        ? value.filename.trim()
+        : "moxu-backup.json";
+    const result = await dialog.showSaveDialog(mainWindow, {
+      defaultPath: filename,
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    if (result.canceled || !result.filePath) {
+      return { canceled: true };
+    }
+    fs.writeFileSync(
+      result.filePath,
+      JSON.stringify(value.payload ?? value, null, 2) + "\n",
+      "utf8",
+    );
+    return { canceled: false, filePath: result.filePath };
+  });
+
+  ipcMain.handle(CHOOSE_BACKUP_CHANNEL, async (event) => {
+    assertTrustedRenderer(event);
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ["openFile"],
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    if (result.canceled || !result.filePaths[0]) return null;
+    return JSON.parse(fs.readFileSync(result.filePaths[0], "utf8"));
+  });
+
+  ipcMain.handle(CHOOSE_IMAGE_CHANNEL, async (event) => {
+    assertTrustedRenderer(event);
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ["openFile"],
+      filters: [
+        {
+          name: "Images",
+          extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp"],
+        },
+      ],
+    });
+    const filePath = result.filePaths[0];
+    if (result.canceled || !filePath) return null;
+
+    return readDesktopImageSelection(filePath);
+  });
+
+  ipcMain.handle(CONFIRM_CHANNEL, async (event, message) => {
+    assertTrustedRenderer(event);
+    const result = await dialog.showMessageBox(mainWindow, {
+      type: "question",
+      buttons: ["取消", "确定"],
+      defaultId: 1,
+      cancelId: 0,
+      message: String(message ?? ""),
+    });
+    return result.response === 1;
+  });
+}
+
+function assertTrustedRenderer(event) {
+  assertTrustedRendererSender(event);
+  const sender = event.sender;
+  const senderUrl = event.senderFrame?.url || sender.getURL?.();
+  if (!senderUrl || !isAllowedAppNavigation(senderUrl, rendererEntryUrl())) {
+    throw new Error("Untrusted renderer URL");
+  }
+}
+
+function assertTrustedRendererSender(event) {
+  const sender = event?.sender;
+  if (!mainWindow || !sender || sender !== mainWindow.webContents) {
+    throw new Error("Untrusted renderer sender");
+  }
+  if (
+    event.senderFrame &&
+    mainWindow.webContents.mainFrame &&
+    event.senderFrame !== mainWindow.webContents.mainFrame
+  ) {
+    throw new Error("Untrusted renderer frame");
+  }
 }
 
 async function migrateDatabase(serverEnvironment) {
   fs.mkdirSync(app.getPath("userData"), { recursive: true });
 
   const migrationCommand = nodeCommand(
-    path.join(appRoot(), "node_modules/prisma/build/index.js"),
+    path.join(desktopRuntimeRoot(), "node_modules/prisma/build/index.js"),
     [
       "migrate",
       "deploy",
       "--config",
-      path.join(appRoot(), "packages/server/prisma.config.ts"),
+      path.join(desktopRuntimeRoot(), "packages/server/prisma.config.ts"),
       "--schema",
-      path.join(appRoot(), "packages/server/prisma/schema.prisma"),
+      path.join(desktopRuntimeRoot(), "packages/server/prisma/schema.prisma"),
     ],
     {
-      cwd: path.join(appRoot(), "packages/server"),
+      cwd: path.join(desktopRuntimeRoot(), "packages/server"),
       env: {
         ...serverEnvironment,
         // Prisma 7.5's SQLite schema engine can exit before returning its first
@@ -399,38 +449,11 @@ function nodeCommand(script, args = [], options = {}) {
   return {
     command: process.execPath,
     args: [script, ...args],
-    cwd: options.cwd || appRoot(),
+    cwd: options.cwd || desktopRuntimeRoot(),
     env: {
       ...options.env,
       ELECTRON_RUN_AS_NODE: "1",
     },
-  };
-}
-
-function developmentServerEnvironment() {
-  return {
-    ...process.env,
-    HOST,
-    PORT: String(API_PORT),
-    NEXT_TELEMETRY_DISABLED: "1",
-    ALLOW_REMOTE_API: "false",
-    CORS_ORIGINS:
-      process.env.CORS_ORIGINS ||
-      process.env.CORS_ORIGIN ||
-      createLocalCorsOrigins(HOST, WEB_PORT),
-  };
-}
-
-function developmentWebEnvironment() {
-  return {
-    ...process.env,
-    HOST,
-    HOSTNAME: HOST,
-    PORT: String(WEB_PORT),
-    MOXU_API_HOST: HOST,
-    MOXU_API_PORT: String(API_PORT),
-    NEXT_TELEMETRY_DISABLED: "1",
-    NEXT_PUBLIC_API_BASE_URL: API_BASE_URL,
   };
 }
 
@@ -439,7 +462,7 @@ async function loadWhenReady() {
     return;
   }
 
-  await mainWindow.loadURL(WEB_URL);
+  await mainWindow.loadFile(rendererEntryPath());
 }
 
 function showMainWindow() {
@@ -456,77 +479,83 @@ function showMainWindow() {
   mainWindow.focus();
 }
 
-function stopServices() {
-  for (const child of [serverProcess, webProcess]) {
-    if (child && !child.killed) {
-      child.kill("SIGTERM");
-    }
+async function stopServices() {
+  servicesReady = false;
+  const server = serverProcess;
+  serverProcess = undefined;
+  if (server) {
+    await server.shutdown().catch(() => server.kill());
   }
 }
 
-function assertPortAvailable(port, name) {
-  return new Promise((resolve, reject) => {
-    const probe = net.createServer();
-    probe.unref();
-    probe.once("error", (error) => {
-      const detail =
-        error && error.code === "EADDRINUSE"
-          ? name + " port " + port + " is already in use."
-          : "Unable to reserve " + name + " port " + port + ": " + error.message;
-      reject(new Error(detail));
-    });
-    probe.listen({ host: HOST, port, exclusive: true }, () => {
-      probe.close((error) => {
-        if (error) {
-          reject(error);
-        } else {
-          resolve();
-        }
-      });
-    });
-  });
-}
+async function restartServices() {
+  if (isQuitting || serviceRestartInProgress) {
+    return;
+  }
 
-async function waitForHttpService(
-  name,
-  child,
-  url,
-  timeoutMs,
-  validateResponse,
-) {
-  const startedAt = Date.now();
+  serviceRestartInProgress = true;
+  const previousServer = serverProcess;
+  serverProcess = undefined;
+  servicesReady = false;
 
-  while (Date.now() - startedAt <= timeoutMs) {
-    if (child.moxuStartupError) {
-      throw new Error(
-        name + " service failed to start: " + child.moxuStartupError.message,
-      );
+  try {
+    if (previousServer) {
+      await previousServer.shutdown();
     }
-    if (child.exitCode !== null || child.signalCode) {
-      throw new Error(
-        name +
-          " service exited before it became ready (" +
-          (child.signalCode || child.exitCode) +
-          ").",
-      );
+    if (isQuitting) return;
+    await startServices();
+    if (!isQuitting && mainWindow && !mainWindow.isDestroyed()) {
+      // loadURL with the same file/hash can be a same-document navigation.
+      // A full reload is required to rerun preload with the new Nest port.
+      await reloadRenderer(mainWindow.webContents);
     }
-
+    if (!isQuitting && (!servicesReady || !serverProcess?.ready)) {
+      throw new Error("Nest API exited while restoring the window");
+    }
+  } catch (error) {
+    if (isQuitting) return;
+    console.error("[desktop] service restart failed", error);
+    const options = {
+      type: "error",
+      message: "墨序服务重启失败",
+      detail: error instanceof Error ? error.message : String(error),
+    };
     try {
-      const response = await fetch(url, {
-        cache: "no-store",
-        signal: AbortSignal.timeout(2_000),
-      });
-      if (await validateResponse(response)) {
-        return;
-      }
-    } catch {
-      // The process can accept TCP before its HTTP routes are ready.
+      await (mainWindow
+        ? dialog.showMessageBox(mainWindow, options)
+        : dialog.showMessageBox(options));
+    } finally {
+      app.quit();
     }
-
-    await new Promise((resolve) => setTimeout(resolve, 350));
+  } finally {
+    serviceRestartInProgress = false;
   }
+}
 
-  throw new Error("Timed out waiting for " + name + " service at " + url + ".");
+function reloadRenderer(contents) {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      contents.removeListener("did-finish-load", loaded);
+      contents.removeListener("did-fail-load", failed);
+      contents.removeListener("destroyed", destroyed);
+    };
+    const loaded = () => { cleanup(); resolve(); };
+    const failed = (_event, code, description, _url, isMainFrame) => {
+      if (!isMainFrame) return;
+      cleanup();
+      reject(new Error(`Renderer reload failed (${code}): ${description}`));
+    };
+    const destroyed = () => { cleanup(); resolve(); };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error("Renderer reload timed out"));
+    }, 30_000);
+    contents.once("did-finish-load", loaded);
+    contents.on("did-fail-load", failed);
+    contents.once("destroyed", destroyed);
+    contents.reload();
+  });
 }
 
 function configureAutoUpdater() {
@@ -638,20 +667,39 @@ function openExternalUrl(url) {
 }
 
 function showServiceError(name, code, signal) {
+  if (serviceErrorDialogOpen || isQuitting) {
+    return;
+  }
+
+  serviceErrorDialogOpen = true;
   const options = {
     type: "error",
     message: "墨序服务已退出",
-    detail: `${name} exited with ${signal || code}. Please restart the app.`,
+    detail: `${name} 已停止（${signal || `退出码 ${code ?? "未知"}`}）。重启服务后将刷新当前页面，尚未保存的编辑需要重新填写。`,
+    buttons: ["重启服务", "退出应用"],
+    defaultId: 0,
+    cancelId: 1,
   };
 
   void (mainWindow
     ? dialog.showMessageBox(mainWindow, options)
-    : dialog.showMessageBox(options));
+    : dialog.showMessageBox(options))
+    .then(({ response }) => {
+      serviceErrorDialogOpen = false;
+      if (response === 0) {
+        return restartServices();
+      }
+      app.quit();
+    })
+    .catch(() => app.quit())
+    .finally(() => {
+      serviceErrorDialogOpen = false;
+    });
 }
 
 async function handleStartupFailure(error) {
   isQuitting = true;
-  stopServices();
+  await stopServices();
   const detail = error instanceof Error ? error.message : String(error);
   console.error("[desktop] startup failed", error);
 
@@ -670,12 +718,31 @@ function projectRoot() {
   return path.resolve(__dirname, "../../..");
 }
 
-function appRoot() {
-  if (!app.isPackaged) {
-    return projectRoot();
+function desktopRuntimeRoot() {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, "runtime");
   }
 
-  return path.join(process.resourcesPath, "runtime");
+  return path.join(projectRoot(), ".moxu", "desktop-runtime");
+}
+
+function serverEntryPath() {
+  return path.join(
+    desktopRuntimeRoot(),
+    "packages",
+    "server",
+    "dist",
+    "src",
+    "main.js",
+  );
+}
+
+function rendererEntryPath() {
+  return path.join(__dirname, "../dist/renderer/index.html");
+}
+
+function rendererEntryUrl() {
+  return pathToFileURL(rendererEntryPath()).toString();
 }
 
 process.on("uncaughtException", (error) => {

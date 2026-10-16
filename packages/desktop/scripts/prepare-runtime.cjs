@@ -34,7 +34,6 @@ async function prepareRuntime(options = {}) {
       copyPrismaClient();
       copyServerOutput();
       copySharedOutput();
-      copyWebStandaloneOutput();
       writeRuntimePackage(electronVersion, targetPlatform, targetArch);
       await rebuildNativeDependencies(electronVersion, targetPlatform, targetArch);
       validateRuntime(electronVersion, targetPlatform, targetArch);
@@ -75,8 +74,6 @@ function assertBuildOutputs() {
     path.join(projectRoot, "packages", "server", "prisma", "schema.prisma"),
     path.join(projectRoot, "packages", "server", "prisma.config.ts"),
     path.join(projectRoot, "packages", "shared", "dist", "index.js"),
-    path.join(projectRoot, "packages", "web", ".next", "standalone"),
-    path.join(projectRoot, "packages", "web", ".next", "static"),
   ];
   const missingPaths = requiredPaths.filter((filePath) => !fs.existsSync(filePath));
 
@@ -88,10 +85,11 @@ function assertBuildOutputs() {
 }
 
 function copyProductionDependencies() {
-  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+  const npmInvocation = resolveNpmInvocation();
   const result = spawnSync(
-    npmCommand,
+    npmInvocation.command,
     [
+      ...npmInvocation.prefixArgs,
       "ls",
       "--omit=dev",
       "--all",
@@ -103,12 +101,13 @@ function copyProductionDependencies() {
       cwd: projectRoot,
       encoding: "utf8",
       maxBuffer: 16 * 1024 * 1024,
+      shell: npmInvocation.shell,
     },
   );
 
-  if (result.status !== 0) {
+  if (result.error || result.status !== 0) {
     throw new Error(
-      `Unable to resolve server production dependencies.\n${result.stderr || result.stdout}`,
+      `Unable to resolve server production dependencies.\n${result.error?.message || result.stderr || result.stdout}`,
     );
   }
 
@@ -138,6 +137,25 @@ function copyProductionDependencies() {
       filter: (source) => !source.split(path.sep).includes(".cache"),
     });
   }
+}
+
+function resolveNpmInvocation(environment = process.env) {
+  const npmCli = environment.npm_execpath;
+  if (npmCli) {
+    return {
+      command: process.execPath,
+      prefixArgs: [npmCli],
+      shell: false,
+    };
+  }
+
+  // npm.cmd is a shell script on Windows and cannot be spawned reliably with
+  // shell:false. Keep the fallback explicit for direct `node` invocations.
+  return {
+    command: process.platform === "win32" ? "npm.cmd" : "npm",
+    prefixArgs: [],
+    shell: process.platform === "win32",
+  };
 }
 
 function isDependencyPath(dependencyPath) {
@@ -196,44 +214,6 @@ function copySharedOutput() {
   );
 }
 
-function copyWebStandaloneOutput() {
-  const webRoot = path.join(projectRoot, "packages", "web");
-  const standaloneSource = path.join(webRoot, ".next", "standalone");
-  const standaloneDestination = path.join(runtimeRoot, "web");
-
-  fs.cpSync(standaloneSource, standaloneDestination, {
-    recursive: true,
-    dereference: true,
-  });
-
-  const monorepoEntry = path.join(
-    standaloneDestination,
-    "packages",
-    "web",
-    "server.js",
-  );
-  const appDestination = fs.existsSync(monorepoEntry)
-    ? path.dirname(monorepoEntry)
-    : standaloneDestination;
-
-  if (!fs.existsSync(path.join(appDestination, "server.js"))) {
-    throw new Error("Next.js standalone output does not contain server.js");
-  }
-
-  fs.cpSync(
-    path.join(webRoot, ".next", "static"),
-    path.join(appDestination, ".next", "static"),
-    { recursive: true },
-  );
-
-  const publicSource = path.join(webRoot, "public");
-  if (fs.existsSync(publicSource)) {
-    fs.cpSync(publicSource, path.join(appDestination, "public"), {
-      recursive: true,
-    });
-  }
-}
-
 function writeRuntimePackage(electronVersion, platform, arch) {
   const betterSqlitePackage = readJson(
     path.join(runtimeRoot, "node_modules", "better-sqlite3", "package.json"),
@@ -275,19 +255,69 @@ function createNativeRebuildOptions(electronVersion, platform, arch) {
   };
 }
 
+function nativeCompilerEnvironment(platform, environment = process.env) {
+  if (platform !== "linux") return {};
+  // GCC rejects attribute placement in Electron 43's V8 headers. Use the
+  // system Clang while preserving an explicitly configured compiler pair.
+  if (environment.CC || environment.CXX) {
+    return {
+      CC: environment.CC || "clang",
+      CXX: environment.CXX || "clang++",
+    };
+  }
+
+  for (const [cc, cxx] of [
+    ["clang-19", "clang++-19"],
+    ["clang-18", "clang++-18"],
+    ["clang", "clang++"],
+  ]) {
+    if (compilerMajorVersion(cc) >= 18 && compilerMajorVersion(cxx) >= 18) {
+      return { CC: cc, CXX: cxx };
+    }
+  }
+
+  return {
+    CC: "clang",
+    CXX: "clang++",
+  };
+}
+
+function compilerMajorVersion(command) {
+  const result = spawnSync(command, ["--version"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.error || result.status !== 0) return 0;
+  const match = String(result.stdout).match(/clang version (\d+)|Apple clang version (\d+)/i);
+  return Number(match?.[1] || match?.[2] || 0);
+}
+
 async function rebuildNativeDependencies(electronVersion, platform, arch) {
   const { rebuild } = await import("@electron/rebuild");
-  const rebuildResult = rebuild(
-    createNativeRebuildOptions(electronVersion, platform, arch),
+  const compilerEnvironment = nativeCompilerEnvironment(platform);
+  const previousEnvironment = Object.fromEntries(
+    Object.keys(compilerEnvironment).map((key) => [key, process.env[key]]),
   );
+  Object.assign(process.env, compilerEnvironment);
 
-  rebuildResult.lifecycle.on("modules-found", (moduleNames) => {
-    console.log(
-      `[desktop-runtime] rebuilding native modules: ${moduleNames.join(", ") || "none"}`,
+  try {
+    const rebuildResult = rebuild(
+      createNativeRebuildOptions(electronVersion, platform, arch),
     );
-  });
 
-  await rebuildResult;
+    rebuildResult.lifecycle.on("modules-found", (moduleNames) => {
+      console.log(
+        `[desktop-runtime] rebuilding native modules: ${moduleNames.join(", ") || "none"}`,
+      );
+    });
+
+    await rebuildResult;
+  } finally {
+    for (const [key, value] of Object.entries(previousEnvironment)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 }
 
 function validateRuntime(electronVersion, platform, arch) {
@@ -500,6 +530,8 @@ module.exports = {
   assertFileFingerprintUnchanged,
   createNativeRebuildOptions,
   fileFingerprint,
+  nativeCompilerEnvironment,
+  resolveNpmInvocation,
   prepareRuntime,
   resolveInstalledElectronVersion,
   runtimeRoot,
