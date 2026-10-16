@@ -6,19 +6,19 @@
 
 | 目标要求 | 当前证据 | 尚缺条件 |
 | --- | --- | --- |
-| 桌面端到端流程 | `test/e2e/run.cjs` 覆盖真实 Electron / Nest / SQLite 的扫描、阅读、搜索、AI SSE 和备份；`desktop-smoke` 运行 38839766229 的 macOS arm64、macOS x64、Windows x64、Linux x64 全部通过 | 各系统安装器、签名 / 公证和真实更新流程 |
+| 桌面端到端流程 | `test/e2e/run.cjs` 覆盖真实 Electron / Nest / SQLite 的扫描、阅读、搜索、AI SSE 和备份；提交 `2c01243` 的 `desktop-smoke` 运行 38841014944 中 macOS arm64、macOS x64、Windows x64、Linux x64 全部通过 | 各系统安装器、签名 / 公证和真实更新流程 |
 | 原生文件 / 目录对话框 | 主进程 Electron dialog、受限 preload、React 调用均已接通；取消、文件错误和返回值已有验证 | 各系统文件选择器的人工点击验收 |
 | Renderer CSP 与 preload 类型安全 | 内联脚本及未许可连接被真实浏览器阻止；沙箱与 Node 全局隔离已核对；共享桥接类型纳入 TypeScript 检查；四平台 smoke 均通过 | 无本机功能阻塞；系统文件选择器仍需人工点击验收 |
 | Nest 异常恢复 | 真实子进程连续两次崩溃后成功重启；新端口重载、持久数据恢复、退出清理均通过；四平台 smoke 均通过 | 各系统安装器、签名 / 公证和真实更新流程 |
-| 文档与发布检查 | 完整验证、实际成品启动、依赖审计失败处理及四平台工作流已接入；CI 运行 38839766318 的完整验证和 Electron 流程通过 | 依赖审计通过；原生平台、安装器、签名 / 公证与真实更新验收 |
+| 文档与发布检查 | 完整验证、实际成品启动、依赖审计失败处理及四平台工作流已接入；提交 `2c01243` 的 CI 运行 38841014930 的完整验证和 Electron 流程通过 | 依赖审计通过；原生平台、安装器、签名 / 公证与真实更新验收 |
 
 所有目标要求均满足后才能将“达到可发布状态”标记完成；已接入的检查和未运行的检查不能视为通过。
 
 ## 远程检查记录
 
-[最新 CI 运行 38839766318](https://github.com/xiaobuliukun/ai-rag/actions/runs/38839766318) 已完成：依赖安装和 Linux Clang 安装成功，`audit:policy` 仍失败；在安装和编译器准备成功后，完整 `verify` 与 Electron 流程均继续执行并通过。`audit:policy` 是该运行唯一失败步骤。
+[提交 `2c01243` 的 CI 运行 38841014930](https://github.com/xiaobuliukun/ai-rag/actions/runs/38841014930) 已完成：依赖安装和 Linux Clang 安装成功，`audit:policy` 仍失败；在安装和编译器准备成功后，完整 `verify` 与 Electron 流程均继续执行并通过。`audit:policy` 是该运行唯一失败步骤。
 
-[最新 `desktop-smoke` 运行 38839766229](https://github.com/xiaobuliukun/ai-rag/actions/runs/38839766229) 的 macOS arm64、macOS x64、Windows x64、Linux x64 四个 job 全部通过。该工作流验证未签名解包应用和自动化对话框替身；系统文件选择器自身仍需人工点击验收。
+[提交 `2c01243` 的 `desktop-smoke` 运行 38841014944](https://github.com/xiaobuliukun/ai-rag/actions/runs/38841014944) 的 macOS arm64、macOS x64、Windows x64、Linux x64 四个 job 全部通过。该工作流验证未签名解包应用和自动化对话框替身；系统文件选择器自身仍需人工点击验收。
 
 ## 已实现
 
