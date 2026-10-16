@@ -1,24 +1,24 @@
 # Electron 桌面端验收记录
 
-核对日期：2026-10-15。当前结构为 Electron 主进程 + 沙箱 preload + 静态 React renderer + 本地 Nest HTTP API。
+核对日期：2026-10-16。当前结构为 Electron 主进程 + 沙箱 preload + 静态 React renderer + 本地 Nest HTTP API。
 
 ## 目标逐项验收
 
 | 目标要求 | 当前证据 | 尚缺条件 |
 | --- | --- | --- |
-| 桌面端到端流程 | `test/e2e/run.cjs` 覆盖真实 Electron / Nest / SQLite 的扫描、阅读、搜索、AI SSE 和备份；macOS arm64、x64 Rosetta 与 Linux x64 容器已通过 | Windows、Linux 和 Intel Mac 原生运行器结果 |
+| 桌面端到端流程 | `test/e2e/run.cjs` 覆盖真实 Electron / Nest / SQLite 的扫描、阅读、搜索、AI SSE 和备份；`desktop-smoke` 运行 38839766229 的 macOS arm64、macOS x64、Windows x64、Linux x64 全部通过 | 各系统安装器、签名 / 公证和真实更新流程 |
 | 原生文件 / 目录对话框 | 主进程 Electron dialog、受限 preload、React 调用均已接通；取消、文件错误和返回值已有验证 | 各系统文件选择器的人工点击验收 |
-| Renderer CSP 与 preload 类型安全 | 内联脚本及未许可连接被真实浏览器阻止；沙箱与 Node 全局隔离已核对；共享桥接类型纳入 TypeScript 检查 | 无本机功能阻塞；随多平台流程复验 |
-| Nest 异常恢复 | 真实子进程连续两次崩溃后成功重启；新端口重载、持久数据恢复、退出清理均通过 | 随多平台流程复验 |
-| 文档与发布检查 | 完整验证、实际成品启动、依赖审计失败处理及四平台工作流已接入 | 依赖审计通过；原生平台、安装器、签名 / 公证与真实更新验收 |
+| Renderer CSP 与 preload 类型安全 | 内联脚本及未许可连接被真实浏览器阻止；沙箱与 Node 全局隔离已核对；共享桥接类型纳入 TypeScript 检查；四平台 smoke 均通过 | 无本机功能阻塞；系统文件选择器仍需人工点击验收 |
+| Nest 异常恢复 | 真实子进程连续两次崩溃后成功重启；新端口重载、持久数据恢复、退出清理均通过；四平台 smoke 均通过 | 各系统安装器、签名 / 公证和真实更新流程 |
+| 文档与发布检查 | 完整验证、实际成品启动、依赖审计失败处理及四平台工作流已接入；CI 运行 38839766318 的完整验证和 Electron 流程通过 | 依赖审计通过；原生平台、安装器、签名 / 公证与真实更新验收 |
 
 所有目标要求均满足后才能将“达到可发布状态”标记完成；已接入的检查和未运行的检查不能视为通过。
 
 ## 远程检查记录
 
-提交 `546bcdb` 的 [GitHub CI 运行 38726409766](https://github.com/xiaobuliukun/ai-rag/actions/runs/38726409766) 已结束：Node / npm 设置、依赖安装和 Linux Clang 安装成功，`audit:policy` 步骤失败，完整验证和 Electron E2E 被跳过。当前可读取的 job 元数据证明失败位置；日志下载返回 403，未据此断言远程报告中的具体公告数量。
+[最新 CI 运行 38839766318](https://github.com/xiaobuliukun/ai-rag/actions/runs/38839766318) 已完成：依赖安装和 Linux Clang 安装成功，`audit:policy` 仍失败；在安装和编译器准备成功后，完整 `verify` 与 Electron 流程均继续执行并通过。`audit:policy` 是该运行唯一失败步骤。
 
-后续本地调整让 CI 在安装成功且未取消时继续收集验证结果，同时保持审计失败状态；该调整尚未在远程运行。`desktop-smoke` 四平台工作流也尚未触发。
+[最新 `desktop-smoke` 运行 38839766229](https://github.com/xiaobuliukun/ai-rag/actions/runs/38839766229) 的 macOS arm64、macOS x64、Windows x64、Linux x64 四个 job 全部通过。该工作流验证未签名解包应用和自动化对话框替身；系统文件选择器自身仍需人工点击验收。
 
 ## 已实现
 
@@ -55,7 +55,7 @@ macOS x64（Apple Silicon 上通过 Rosetta 运行）：
 - 在独立临时源码目录安装 Node 24.19.0 x64、npm 11.21.0 和 Electron 43.7.11 x64；Node 下载校验与官方 SHASUMS256.txt 一致，Electron 下载校验与官方 npm 包 checksums.json 一致。
 - 从 lockfile 干净安装，通过桌面构建、x86_64 SQLite 原生模块重建和 Prisma 首次迁移；生成未签名 x64 `.app`。
 - 真实 Electron E2E 和 `test:packaged` 均通过，包含阅读/扫描/备份/搜索/AI SSE、连续两次 Nest 恢复、CSP、全新 userData 迁移及退出清理。
-- 该证据覆盖 x64 程序在 Rosetta 下的运行；Intel 硬件、安装器、签名 / 公证和更新验收仍待执行。
+- 该证据覆盖 x64 程序在 Rosetta 下的运行；GitHub `desktop-smoke` 的 macOS x64 原生 runner 也已通过。Intel 硬件、安装器、签名 / 公证和更新验收仍待执行。
 
 Linux x64（Docker `node:24.19.0-bookworm`，x86_64 模拟运行）：
 
@@ -63,7 +63,7 @@ Linux x64（Docker `node:24.19.0-bookworm`，x86_64 模拟运行）：
 - Prisma 迁移、未签名 Linux unpacked 应用、无头 Electron E2E 和 `test:packaged` 均通过；测试覆盖扫描、阅读、备份、搜索、AI SSE、Nest 恢复、CSP 和退出清理。
 - 使用合法的 `moxu-desktop` 可执行文件名完成未签名 AppImage 与 deb 构建；两种产物生成后再次运行 packaged smoke 通过。electron-builder 的 Linux 桌面入口元数据已设置 `desktopName` 与 `syncDesktopName`，避免窗口关联警告。
 - 容器使用非 root 用户与 Xvfb，并配置 `seccomp=unconfined` 允许 Chromium 创建命名空间；Electron 的 sandbox、Node 隔离和 CSP 保持启用，未使用 `--no-sandbox`。这些结果不代表宿主系统的默认沙箱配置已验收。
-- 该容器验证覆盖 Linux x64 的代码路径；GitHub Ubuntu runner 仍需实际运行，Linux 安装器、签名和发行包下载验收仍待执行。
+- 该容器验证覆盖 Linux x64 的代码路径；GitHub `desktop-smoke` 的 Ubuntu x64 runner 也已通过。Linux 安装器、签名和发行包下载验收仍待执行。
 
 复现命令：
 
@@ -92,6 +92,6 @@ Linux 无图形会话时在 E2E 命令前加 `xvfb-run -a`。截图位于 `.moxu
 
 1. **依赖安全检查未通过。** 已消除 Electron、Next、Nest / Express 相关的本轮可直接修复报告；当前全仓库审计有 69 个受影响包条目（53 high、16 moderate、0 critical），来自下列 4 个公告源，包含传递依赖计数。`npm run audit:policy` 已验证会失败并阻止发布；网络错误、异常退出、不完整报告和白名单严重级别变化也会阻止通过。未放宽审计白名单。
 2. **剩余依赖需要单独处理。** 当前未通过审计的公告源为 `braces`、`decode-uri-component`、`node-forge` 和 `sprintf-js`。其中部分暂无可用上游修复版本；`decode-uri-component` 的修复版本是 ESM，而现有 `query-string` 依赖 CommonJS 接口，不能直接覆盖。不能通过批量强制覆盖版本或放宽白名单来宣称问题已经解决。
-3. **多平台安装与发布验收。** Windows、Linux 和 Intel Mac 原生运行器的检查尚未执行；本机 x64 Rosetta 检查不替代 Intel 硬件验收。系统对话框、安装器、签名 / 公证及真实更新流程需在对应环境验证。已配置 `desktop-smoke` 和 Release 测试入口，不代表这些远程任务已运行。
+3. **多平台安装与发布验收。** 四个平台的 GitHub smoke 已通过，但它验证的是未签名解包应用和自动化对话框替身。系统对话框、安装器、签名 / 公证及真实更新流程仍需在对应环境验证。
 
 上述项目完成前，桌面功能可在本机开发验证，但“达到可正式发布状态”的目标仍应保持进行中。
