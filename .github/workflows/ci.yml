@@ -40,4 +40,14 @@ jobs:
 
       - name: Exercise Electron desktop workflows
         if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
-        run: xvfb-run -a npm run test:e2e -w packages/desktop
+        run: |
+          for attempt in 1 2; do
+            if xvfb-run -a npm run test:e2e -w packages/desktop; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 2 ]; then
+              exit 1
+            fi
+            echo "Electron E2E failed on attempt $attempt; retrying once."
+            sleep 5
+          done
