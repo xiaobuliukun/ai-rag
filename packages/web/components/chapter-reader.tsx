@@ -112,6 +112,10 @@ export function ChapterReader({
       }) as React.CSSProperties,
     [colorTemperature, effectiveBrightness, fontSize, lineHeight, paperTexture],
   );
+  const markdownStyle = React.useMemo(
+    () => ({ fontSize, lineHeight }) as React.CSSProperties,
+    [fontSize, lineHeight],
+  );
   const autoSaveIntervalMs = React.useMemo(
     () => Math.max(5000, autoSaveIntervalSeconds * 1000),
     [autoSaveIntervalSeconds],
@@ -441,27 +445,39 @@ export function ChapterReader({
       return;
     }
 
+    let animationFrame: number | undefined;
     const updateFromScroll = () => {
-      const content = contentRef.current;
-      if (!content) {
+      if (animationFrame !== undefined) {
         return;
       }
 
-      const contentRect = content.getBoundingClientRect();
-      const viewportRect = scrollContainer.getBoundingClientRect();
-      const nextProgress = calculateReadingProgress({
-        contentTop: contentRect.top,
-        contentHeight: contentRect.height,
-        viewportTop: viewportRect.top,
-        viewportHeight: scrollContainer.clientHeight,
-      });
+      animationFrame = window.requestAnimationFrame(() => {
+        animationFrame = undefined;
+        const content = contentRef.current;
+        if (!content) {
+          return;
+        }
 
-      currentScrollProgressRef.current = calculateScrollPercentage({
-        scrollTop: scrollContainer.scrollTop,
-        scrollHeight: scrollContainer.scrollHeight,
-        viewportHeight: scrollContainer.clientHeight,
+        const contentRect = content.getBoundingClientRect();
+        const viewportRect = scrollContainer.getBoundingClientRect();
+        const nextProgress = calculateReadingProgress({
+          contentTop: contentRect.top,
+          contentHeight: contentRect.height,
+          viewportTop: viewportRect.top,
+          viewportHeight: scrollContainer.clientHeight,
+        });
+
+        currentScrollProgressRef.current = calculateScrollPercentage({
+          scrollTop: scrollContainer.scrollTop,
+          scrollHeight: scrollContainer.scrollHeight,
+          viewportHeight: scrollContainer.clientHeight,
+        });
+
+        if (nextProgress > progressRef.current) {
+          progressRef.current = nextProgress;
+          setProgress(nextProgress);
+        }
       });
-      setProgress((current) => Math.max(current, nextProgress));
     };
 
     updateFromScroll();
@@ -471,6 +487,9 @@ export function ChapterReader({
     window.addEventListener("resize", updateFromScroll);
 
     return () => {
+      if (animationFrame !== undefined) {
+        window.cancelAnimationFrame(animationFrame);
+      }
       scrollContainer.removeEventListener("scroll", updateFromScroll);
       window.removeEventListener("resize", updateFromScroll);
     };
@@ -720,7 +739,7 @@ export function ChapterReader({
               content={chapter.content}
               bookId={book.id}
               chapterFileName={chapter.fileName}
-              style={{ fontSize, lineHeight }}
+              style={markdownStyle}
             />
           ) : (
             <div className="rounded-lg border bg-card p-8 text-center text-muted-foreground">
