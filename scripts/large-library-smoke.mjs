@@ -18,6 +18,7 @@ const root = await mkdtemp(path.join(os.tmpdir(), "moxu-large-library-"));
 const libraryPath = path.join(root, "books");
 const dbPath = path.join(root, "large-smoke.db");
 let server;
+let shuttingDown = false;
 
 try {
   await generateLibrary(libraryPath, BOOK_COUNT, CHAPTERS_PER_BOOK);
@@ -34,6 +35,7 @@ try {
       SCAN_JOBS_FILE: path.join(root, "scan-jobs.json"),
     },
     stdio: ["ignore", "pipe", "pipe"],
+    detached: process.platform !== "win32",
   });
   server.stdout.on("data", (chunk) => process.stdout.write(`[server] ${chunk}`));
   server.stderr.on("data", (chunk) => process.stderr.write(`[server] ${chunk}`));
@@ -104,8 +106,21 @@ try {
   console.log(`[large-smoke] search results: ${searchResults.length}`);
   console.log(`[large-smoke] AI sources: ${aiResponse.sources.length}`);
 } finally {
-  if (server && !server.killed) {
-    server.kill("SIGTERM");
+  if (server && server.exitCode === null && !shuttingDown) {
+    shuttingDown = true;
+    if (process.platform === "win32") {
+      const taskkill = spawn("taskkill", ["/pid", String(server.pid), "/t", "/f"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      taskkill.unref();
+    } else {
+      try {
+        process.kill(-server.pid, "SIGTERM");
+      } catch (error) {
+        if (error.code !== "ESRCH") throw error;
+      }
+    }
   }
   if (!KEEP_FIXTURE) {
     await rm(root, { recursive: true, force: true });

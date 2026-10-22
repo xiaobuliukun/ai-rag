@@ -12,7 +12,7 @@
 - 语义检索：默认本地 hash embedding，可配置 OpenAI-compatible `/embeddings`。
 - AI 问答：默认本地抽取式回答，可配置 OpenAI-compatible `/chat/completions`。
 - 数据备份：导出/导入书籍、章节、进度、书签、AI/RAG 配置和前端阅读偏好。
-- 多端入口：Web、Electron 桌面端、Expo React Native 移动端共享同一套本地 API。
+- 多端入口：Web、Electron 桌面端和 Expo React Native 共用 NestJS HTTP API；桌面端的窗口和原生能力由 Electron 提供。
 - 本地安全：API 默认监听 `127.0.0.1`，并默认拒绝非本机 Host。
 
 ## Monorepo 结构
@@ -22,7 +22,7 @@ packages/
   server/    NestJS API，Prisma，SQLite，FTS5，RAG 与备份
   web/       Next.js Web 阅读器与管理界面
   app/       Expo React Native 移动端
-  desktop/   Electron 桌面壳与安装包配置
+  desktop/   Electron 桌面客户端与安装包配置
   shared/    前后端共享 TypeScript 类型
 docs/
   product_requirements_document.md
@@ -41,6 +41,8 @@ scripts/
 - `packages/shared`：共享 DTO、实体和 API 类型
 
 ## 快速开始
+
+需要 Node.js 24+ 和 npm 11.21.0+。工作区的依赖覆盖使用 npm 11.21.0 验证；旧 npm 可能忽略覆盖规则。可运行 `npm install --global npm@11.21.0`，或通过 `npx --yes npm@11.21.0` 执行下列 npm 命令。
 
 ```bash
 npm install
@@ -112,6 +114,7 @@ npm run typecheck -w packages/app
 # Desktop
 npm run desktop:dev
 npm run test -w packages/desktop
+npm run test:desktop:e2e
 npm run desktop:pack
 npm run desktop:dist:mac
 npm run desktop:dist:mac:signed
@@ -289,7 +292,19 @@ packages/app/src/
 
 ## 桌面端
 
-桌面端位于 `packages/desktop`。Electron 壳会先应用 Prisma migration，再启动本地 API 和 Next standalone Web 服务，默认在窗口中打开 `http://127.0.0.1:3000`。可用 `MOXU_WEB_PORT` 和 `MOXU_API_PORT` 修改端口；两者必须不同且启动前会检查占用，自定义 Web 端口会自动加入本地 CORS 来源。自动化 smoke 可用绝对路径 `MOXU_USER_DATA_DIR` 隔离数据库、扫描任务和本地密钥。
+桌面端位于 `packages/desktop`，使用原生 Electron 主进程、preload 和本地静态 React renderer，不再启动 Next.js Web 服务。启动时 Electron 先应用 Prisma migration，再以子进程启动 NestJS HTTP API；Nest 会监听动态 loopback 端口，renderer 通过 `http://127.0.0.1:<port>/api` 调用与 Web、移动端相同的 Controller。preload 只暴露 API 地址、目录/备份/封面图片选择、备份保存和确认等 Electron 原生能力，窗口启用 context isolation、sandbox、禁用 Node 集成和受限 CSP。Nest 服务意外退出时，桌面端会提供原地重启服务并重新加载 renderer 的恢复流程。
+
+开发启动会先构建 shared、server 和 renderer，再准备与 Electron ABI 匹配的 better-sqlite3 运行时：
+
+Linux 需要较新的 Clang（建议 18+）、Python、make 和系统 C/C++ 开发库；运行时默认使用 `clang` / `clang++`，可通过 `CC` / `CXX` 指定安装位置。详细要求见 [发布指南](docs/releasing.md)。
+
+```bash
+npm run desktop:dev
+```
+
+桌面数据默认保存在开发目录 `.moxu/desktop-user-data`，打包版本使用 Electron 的 userData 目录；可用绝对路径 `MOXU_USER_DATA_DIR` 覆盖。桌面 Nest 服务仅绑定 `127.0.0.1`，关闭 Electron 时会一起退出。
+
+书库和管理页在桌面端使用原生目录选择器扫描书库；管理页使用原生 JSON 文件选择器导入备份，以及原生图片选择器读取封面。Web 端继续使用浏览器文件控件。封面图片在主进程检查扩展名与文件头为 PNG/JPEG/GIF/WebP/BMP 且不超过 1.5 MB 后才会传入 renderer。运行 `npm run test:desktop:e2e` 可使用隔离数据验证桌面主要流程和服务恢复；系统对话框由自动化返回选择结果，其余链路使用真实进程。
 
 常用产物：
 
@@ -300,6 +315,8 @@ packages/app/src/
 `desktop:dist:mac` 默认跳过本机证书自动发现，用于稳定生成本地未签名 `.dmg` / `.zip`。正式签名发布使用 `desktop:dist:mac:signed`，由 electron-builder 读取平台环境变量完成，例如 macOS 可使用 `CSC_LINK`、`CSC_KEY_PASSWORD` 和 Apple notarization 相关变量。
 
 正式打包版本默认从 `xiaobuliukun/ai-rag` 的 GitHub Release 检查更新，也可以通过安全的 `UPDATE_URL` 和 `UPDATE_CHANNEL` 覆盖为自建更新源。多平台发布、签名凭据和产物校验流程见 `docs/releasing.md`。
+
+当前桌面验证结果与发布前待办见 [Electron 桌面端验收记录](docs/desktop-readiness.md)。
 
 ## 备份与恢复
 

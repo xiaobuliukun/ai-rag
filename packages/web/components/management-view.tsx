@@ -25,6 +25,7 @@ import {
   ScanJobStatus,
   SearchIndexStatus,
 } from "@/types";
+import type { DesktopImageSelection } from "@/types/desktop-bridge";
 import {
   deleteBook,
   deleteBookmark,
@@ -84,6 +85,7 @@ export function ManagementView() {
   const [scanJob, setScanJob] = React.useState<ScanJobStatus | null>(null);
   const [status, setStatus] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const coverInputRef = React.useRef<HTMLInputElement>(null);
 
   const selectedBook = books.find((book) => book.id === selectedBookId) ?? null;
 
@@ -215,6 +217,25 @@ export function ManagementView() {
     }
   };
 
+  const applyCoverSelection = (selection: DesktopImageSelection) => {
+    const { dataUrl, mimeType, size } = selection;
+    setStatus(null);
+    setError(null);
+
+    if (!mimeType.startsWith("image/")) {
+      setError(t("management.coverInvalid"));
+      return;
+    }
+
+    if (size > MAX_COVER_IMAGE_SIZE) {
+      setError(t("management.coverTooLarge"));
+      return;
+    }
+
+    setForm((current) => ({ ...current, coverImage: dataUrl }));
+    setStatus(t("management.coverSelected"));
+  };
+
   const handleCoverFile = async (
     event: React.ChangeEvent<HTMLInputElement>,
   ) => {
@@ -226,31 +247,58 @@ export function ManagementView() {
 
     setStatus(null);
     setError(null);
-
     if (!file.type.startsWith("image/")) {
       setError(t("management.coverInvalid"));
       return;
     }
-
     if (file.size > MAX_COVER_IMAGE_SIZE) {
       setError(t("management.coverTooLarge"));
       return;
     }
-
     try {
-      const dataUrl = await readFileAsDataUrl(file);
-      setForm((current) => ({
-        ...current,
-        coverImage: dataUrl,
-      }));
-      setStatus(t("management.coverSelected"));
+      applyCoverSelection({
+        dataUrl: await readFileAsDataUrl(file),
+        fileName: file.name,
+        mimeType: file.type,
+        size: file.size,
+      });
     } catch {
       setError(t("management.coverReadFailed"));
     }
   };
 
+  const handleChooseCover = async () => {
+    const desktopBridge = getDesktopBridge();
+    if (!desktopBridge?.chooseImage) {
+      coverInputRef.current?.click();
+      return;
+    }
+
+    try {
+      setStatus(null);
+      setError(null);
+      const selection = await desktopBridge.chooseImage();
+      if (selection) {
+        applyCoverSelection(selection);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("management.coverReadFailed"));
+    }
+  };
+
+  const handleChooseDirectory = async () => {
+    try {
+      const directory = await getDesktopBridge()?.selectDirectory?.();
+      if (directory) {
+        setScanPath(directory);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("library.scanFailed"));
+    }
+  };
+
   const handleDeleteBook = async () => {
-    if (!selectedBook || !window.confirm(t("management.deleteConfirm"))) {
+    if (!selectedBook || !(await confirmDesktop(t("management.deleteConfirm")))) {
       return;
     }
 
@@ -273,29 +321,23 @@ export function ManagementView() {
 
     try {
       const payload = await createCurrentBackup();
-      downloadBackupPayload(
+      const saved = await downloadBackupPayload(
         payload,
         `moxu-backup-${new Date().toISOString().slice(0, 10)}.json`,
       );
+      if (!saved) return;
       setStatus(t("management.exported"));
     } catch (err) {
       setError(err instanceof Error ? err.message : t("management.exportFailed"));
     }
   };
 
-  const handleImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (!file) {
-      return;
-    }
-
+  const importBackupPayload = async (parsedPayload: BackupPayload) => {
     setIsImporting(true);
     setStatus(null);
     setError(null);
 
     try {
-      const parsedPayload = JSON.parse(await file.text()) as BackupPayload;
       const payload = {
         ...parsedPayload,
         clientPreferences: sanitizeClientPreferences(
@@ -306,17 +348,20 @@ export function ManagementView() {
         mode: importMode,
         payload,
         confirmInitialReplace: () =>
-          window.confirm(t("management.importReplaceWarning")),
+          confirmDesktop(t("management.importReplaceWarning")),
         createRecoveryBackup: createCurrentBackup,
-        downloadRecoveryBackup: (recoveryPayload) => {
-          downloadBackupPayload(
+        downloadRecoveryBackup: async (recoveryPayload) => {
+          const saved = await downloadBackupPayload(
             recoveryPayload,
             `moxu-before-replace-${formatBackupTimestamp(new Date())}.json`,
           );
+          if (!saved) {
+            throw new Error("Recovery backup save was cancelled");
+          }
           setStatus(t("management.importReplaceRecoveryDownloaded"));
         },
         confirmFinalReplace: () =>
-          window.confirm(t("management.importReplaceFinalConfirm")),
+          confirmDesktop(t("management.importReplaceFinalConfirm")),
         importPayload: importBackup,
         applyImportedPayload: (importedPayload) =>
           applyClientPreferences(importedPayload.clientPreferences, setTheme),
@@ -338,6 +383,33 @@ export function ManagementView() {
       );
     } finally {
       setIsImporting(false);
+    }
+  };
+
+  const handleImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+
+    try {
+      await importBackupPayload(JSON.parse(await file.text()) as BackupPayload);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("management.importFailed"));
+    }
+  };
+
+  const handleChooseBackup = async () => {
+    try {
+      setStatus(null);
+      setError(null);
+      const payload = await getDesktopBridge()?.chooseBackup?.();
+      if (payload) {
+        await importBackupPayload(payload);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("management.importFailed"));
     }
   };
 
@@ -403,21 +475,37 @@ export function ManagementView() {
               </button>
             ))}
           </div>
-          <label className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-md border bg-card px-3 text-sm font-medium transition-colors hover:bg-secondary">
-            {isImporting ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <ArchiveRestore className="h-4 w-4" />
-            )}
-            {t("management.import")}
-            <input
-              type="file"
-              accept="application/json,.json"
-              onChange={handleImport}
+          {getDesktopBridge()?.chooseBackup ? (
+            <button
+              type="button"
+              onClick={() => void handleChooseBackup()}
               disabled={isImporting}
-              className="hidden"
-            />
-          </label>
+              className="inline-flex h-10 items-center gap-2 rounded-md border bg-card px-3 text-sm font-medium transition-colors hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isImporting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <ArchiveRestore className="h-4 w-4" />
+              )}
+              {t("management.import")}
+            </button>
+          ) : (
+            <label className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-md border bg-card px-3 text-sm font-medium transition-colors hover:bg-secondary">
+              {isImporting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <ArchiveRestore className="h-4 w-4" />
+              )}
+              {t("management.import")}
+              <input
+                type="file"
+                accept="application/json,.json"
+                onChange={handleImport}
+                disabled={isImporting}
+                className="hidden"
+              />
+            </label>
+          )}
         </div>
       </div>
 
@@ -450,6 +538,15 @@ export function ManagementView() {
           placeholder={t("library.scanPlaceholder")}
           className="h-10 min-w-0 flex-1 rounded-md border bg-background px-3 text-sm outline-none transition-all focus:ring-2 focus:ring-primary/50"
         />
+        {getDesktopBridge()?.selectDirectory && (
+          <button
+            type="button"
+            onClick={() => void handleChooseDirectory()}
+            className="inline-flex h-10 items-center justify-center rounded-md border bg-background px-3 text-sm font-medium transition-colors hover:bg-secondary"
+          >
+            {t("library.chooseDirectory")}
+          </button>
+        )}
         <button
           type="submit"
           disabled={isScanning}
@@ -524,9 +621,9 @@ export function ManagementView() {
           <div className="scrollbar-soft grid min-h-0 gap-5 overflow-y-auto pr-1 xl:grid-cols-[minmax(24rem,1fr)_minmax(16rem,0.72fr)] xl:overflow-hidden">
             <section className="scrollbar-soft min-h-0 overflow-y-auto rounded-lg border bg-card p-4 shadow-sm">
               <div className="mb-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
-                <div>
+                <div className="min-w-0">
                   <h2 className="font-semibold">{t("management.metadata")}</h2>
-                  <p className="mt-1 text-sm text-muted-foreground">
+                  <p className="mt-1 break-all text-sm text-muted-foreground">
                     {selectedBook?.path ?? t("management.selectBook")}
                   </p>
                 </div>
@@ -611,16 +708,21 @@ export function ManagementView() {
                             placeholder="cover.png"
                             className="h-10 min-w-0 flex-1 rounded-md border bg-background px-3 text-sm outline-none transition-all focus:ring-2 focus:ring-primary/50"
                           />
-                          <label className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-md border bg-background px-3 text-sm font-medium transition-colors hover:bg-secondary">
+                          <button
+                            type="button"
+                            onClick={() => void handleChooseCover()}
+                            className="inline-flex h-10 items-center gap-2 rounded-md border bg-background px-3 text-sm font-medium transition-colors hover:bg-secondary"
+                          >
                             <ImagePlus className="h-4 w-4" />
                             {t("management.chooseCover")}
-                            <input
-                              type="file"
-                              accept="image/*"
-                              onChange={handleCoverFile}
-                              className="hidden"
-                            />
-                          </label>
+                          </button>
+                          <input
+                            ref={coverInputRef}
+                            type="file"
+                            accept="image/*"
+                            onChange={handleCoverFile}
+                            className="hidden"
+                          />
                         </div>
                       </div>
                     </div>
@@ -910,7 +1012,16 @@ async function createCurrentBackup(): Promise<BackupPayload> {
   };
 }
 
-function downloadBackupPayload(payload: BackupPayload, fileName: string) {
+async function downloadBackupPayload(
+  payload: BackupPayload,
+  fileName: string,
+): Promise<boolean> {
+  const desktopBridge = getDesktopBridge();
+  if (desktopBridge?.saveBackup) {
+    const result = await desktopBridge.saveBackup(payload, fileName);
+    return !result.canceled;
+  }
+
   const blob = new Blob([JSON.stringify(payload, null, 2)], {
     type: "application/json",
   });
@@ -924,6 +1035,30 @@ function downloadBackupPayload(payload: BackupPayload, fileName: string) {
   } finally {
     URL.revokeObjectURL(url);
   }
+  return true;
+}
+
+function getDesktopBridge() {
+  if (typeof window === "undefined") {
+    return undefined;
+  }
+
+  const bridge = window.moxuDesktop;
+  return bridge &&
+    (bridge.saveBackup ||
+      bridge.chooseBackup ||
+      bridge.chooseImage ||
+      bridge.selectDirectory ||
+      bridge.confirm)
+    ? bridge
+    : undefined;
+}
+
+function confirmDesktop(message: string) {
+  return (
+    getDesktopBridge()?.confirm?.(message) ??
+    Promise.resolve(window.confirm(message))
+  );
 }
 
 function formatBackupTimestamp(date: Date) {

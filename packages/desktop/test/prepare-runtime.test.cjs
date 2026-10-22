@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -7,6 +8,8 @@ const {
   assertFileFingerprintUnchanged,
   createNativeRebuildOptions,
   fileFingerprint,
+  nativeCompilerEnvironment,
+  resolveNpmInvocation,
   resolveInstalledElectronVersion,
   runtimeRoot,
   withFileFingerprintGuard,
@@ -14,6 +17,33 @@ const {
 const beforePack = require("../scripts/before-pack.cjs");
 const afterPack = require("../scripts/after-pack.cjs");
 const desktopPackage = require("../package.json");
+
+test("dependency discovery executes the selected npm CLI with literal paths", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "moxu npm cli "));
+  const npmCli = path.join(tempRoot, "npm & selected.cjs");
+  try {
+    fs.writeFileSync(npmCli, "process.stdout.write(JSON.stringify(process.argv.slice(2)))");
+    const invocation = resolveNpmInvocation({ npm_execpath: npmCli });
+    const args = ["ls", "--omit=dev", "--all", "--parseable", "--workspace", "packages/server"];
+    const result = spawnSync(invocation.command, [...invocation.prefixArgs, ...args], {
+      encoding: "utf8",
+      shell: invocation.shell,
+    });
+    assert.equal(invocation.shell, false);
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), args);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("direct node invocation supports the Windows npm command shim", () => {
+  const invocation = resolveNpmInvocation({});
+  assert.deepEqual(invocation.prefixArgs, []);
+  assert.equal(invocation.command, process.platform === "win32" ? "npm.cmd" : "npm");
+  assert.equal(invocation.shell, process.platform === "win32");
+});
 
 test("resolves an exact installed Electron version for native rebuilds", () => {
   const installedElectron = require("electron/package.json").version;
@@ -30,6 +60,17 @@ test("limits native rebuild discovery to the isolated runtime", () => {
   assert.equal(options.projectRootPath, runtimeRoot);
   assert.deepEqual(options.onlyModules, ["better-sqlite3"]);
   assert.equal(options.force, true);
+});
+
+test("Linux builds default to Clang and preserve explicit compiler settings", () => {
+  const defaults = nativeCompilerEnvironment("linux", {});
+  assert.match(defaults.CC, /^clang(?:-(?:18|19))?$/);
+  assert.match(defaults.CXX, /^clang\+\+(?:-(?:18|19))?$/);
+  assert.deepEqual(
+    nativeCompilerEnvironment("linux", { CC: "cc", CXX: "c++" }),
+    { CC: "cc", CXX: "c++" },
+  );
+  assert.deepEqual(nativeCompilerEnvironment("darwin", {}), {});
 });
 
 test("detects native dependency changes outside the isolated runtime", () => {
@@ -114,14 +155,17 @@ test("beforePack waits for isolated runtime preparation", async () => {
   assert.equal(settled, true);
 });
 
-test("packages standalone web dependencies as a separate resource", () => {
-  assert.ok(
-    desktopPackage.build.extraResources.some(
-      (resource) =>
-        resource.from === "../../.moxu/desktop-runtime/web/node_modules" &&
-        resource.to === "runtime/web/node_modules",
+test("does not package a Next.js web runtime", () => {
+  assert.equal(
+    desktopPackage.build.extraResources.some((resource) =>
+      String(resource.from).includes("desktop-runtime/web"),
     ),
+    false,
   );
+});
+
+test("packages the static native renderer", () => {
+  assert.ok(desktopPackage.build.files.includes("dist/renderer/**/*"));
 });
 
 test("afterPack rejects an incomplete desktop runtime", async () => {
@@ -159,8 +203,6 @@ test("afterPack rejects an incomplete desktop runtime", async () => {
       "dist",
       "index.js",
     ),
-    path.join(runtimeRoot, "web", "packages", "web", "server.js"),
-    path.join(runtimeRoot, "web", "node_modules", "next", "package.json"),
   ];
 
   try {
@@ -178,8 +220,6 @@ test("afterPack rejects an incomplete desktop runtime", async () => {
     );
     fs.writeFileSync(sharedPackagePath, "fixture");
 
-    fs.rmSync(requiredFiles.at(-1));
-    await assert.rejects(() => afterPack(context), /runtime is incomplete.*next/s);
   } finally {
     fs.rmSync(appOutDir, { recursive: true, force: true });
   }

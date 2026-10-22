@@ -1,0 +1,8 @@
+{
+  "extends": "./renderer/tsconfig.json",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true
+  },
+  "include": ["src/preload.cjs", "renderer/src/**/*.ts", "renderer/src/**/*.tsx"]
+}

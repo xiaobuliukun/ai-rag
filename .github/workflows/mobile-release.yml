@@ -41,6 +41,9 @@ jobs:
           node-version: 24.19.0
           cache: npm
 
+      - name: Set up npm
+        run: npm install --global npm@11.21.0
+
       - name: Set up Expo and EAS
         uses: expo/expo-github-action@c7b66a9c327a43a8fa7c0158e7f30d6040d2481e # v8
         with:

@@ -1,0 +1,107 @@
+name: desktop-smoke
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "packages/desktop/**"
+      - "packages/server/**"
+      - "packages/shared/**"
+      - "packages/web/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/desktop-smoke.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: smoke-${{ matrix.id }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: macos-arm64
+            runner: macos-15
+            platform: mac
+            executable: ../../release/desktop/mac-arm64/墨序.app/Contents/MacOS/墨序
+          - id: macos-x64
+            runner: macos-15-intel
+            platform: mac
+            executable: ../../release/desktop/mac/墨序.app/Contents/MacOS/墨序
+          - id: windows-x64
+            runner: windows-2025
+            platform: windows
+            executable: ../../release/desktop/win-unpacked/墨序.exe
+          - id: linux-x64
+            runner: ubuntu-24.04
+            platform: linux
+            executable: ../../release/desktop/linux-unpacked/moxu-desktop
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+          cache: npm
+
+      - name: Set up npm
+        run: npm install --global npm@11.21.0
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Linux native compiler
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install --yes clang
+
+      - name: Check desktop types and unit tests
+        run: |
+          npm run typecheck -w packages/desktop
+          npm test -w packages/desktop
+
+      - name: Build embedded services and renderer
+        run: npm run build:desktop
+
+      # This workflow validates unpacked applications without release credentials.
+      # The desktop-release workflow retains its audit, signing and publish gates.
+      - name: Package unsigned application
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npm run pack -w packages/desktop
+
+      - name: Exercise Electron workflows on native platform
+        if: matrix.platform != 'linux'
+        run: npm run test:e2e -w packages/desktop
+
+      - name: Exercise Electron workflows on Linux
+        if: matrix.platform == 'linux'
+        run: xvfb-run -a npm run test:e2e -w packages/desktop
+
+      - name: Verify packaged application startup
+        if: matrix.platform != 'linux'
+        run: npm run test:packaged -w packages/desktop -- "${{ matrix.executable }}"
+
+      - name: Verify packaged application startup on Linux
+        if: matrix.platform == 'linux'
+        run: xvfb-run -a npm run test:packaged -w packages/desktop -- "${{ matrix.executable }}"
+
+      - name: Upload failure screenshots
+        if: failure()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: desktop-smoke-${{ matrix.id }}-screenshots
+          path: .moxu/e2e-results/*.png
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7

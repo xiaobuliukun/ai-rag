@@ -18,13 +18,91 @@ interface MarkdownReaderProps {
   style?: CSSProperties;
 }
 
-export function MarkdownReader({
+const markdownRemarkPlugins = [remarkGfm];
+
+export const MarkdownReader = React.memo(function MarkdownReader({
   content,
   bookId,
   chapterFileName,
   className,
   style,
 }: MarkdownReaderProps) {
+  const components = React.useMemo(
+    () => ({
+      table({ children }: { children?: React.ReactNode }) {
+        return (
+          <div className="my-6 overflow-x-auto rounded-lg border">
+            <table className="m-0 w-full border-collapse text-sm">
+              {children}
+            </table>
+          </div>
+        );
+      },
+      th({ children, ...props }: ComponentPropsWithoutRef<"th">) {
+        return (
+          <th
+            className="border-b bg-secondary px-3 py-2 text-left font-semibold"
+            {...props}
+          >
+            {children}
+          </th>
+        );
+      },
+      td({ children, ...props }: ComponentPropsWithoutRef<"td">) {
+        return (
+          <td className="border-b px-3 py-2 align-top" {...props}>
+            {children}
+          </td>
+        );
+      },
+      input({ className, ...props }: ComponentPropsWithoutRef<"input">) {
+        return (
+          <input
+            className={cn("mr-2 align-middle accent-primary", className)}
+            {...props}
+            disabled
+          />
+        );
+      },
+      pre({ children }: ComponentPropsWithoutRef<"pre">) {
+        return <>{children}</>;
+      },
+      code({
+        inline,
+        className,
+        children,
+        ...props
+      }: ComponentPropsWithoutRef<"code"> & { inline?: boolean }) {
+        const match = /language-(\w+)/.exec(className || "");
+        return !inline && match ? (
+          <CodeBlock language={match[1]} className={className} {...props}>
+            {children}
+          </CodeBlock>
+        ) : (
+          <code
+            className={cn(
+              "bg-muted px-1.5 py-0.5 rounded text-sm font-mono text-primary",
+              className,
+            )}
+            {...props}
+          >
+            {children}
+          </code>
+        );
+      },
+      img({ src = "", alt = "" }: ComponentPropsWithoutRef<"img">) {
+        const resolvedSrc = resolveMarkdownImageSrc(
+          typeof src === "string" ? src : "",
+          bookId,
+          chapterFileName,
+        );
+
+        return <MarkdownImage src={resolvedSrc} alt={String(alt ?? "")} />;
+      },
+    }),
+    [bookId, chapterFileName],
+  );
+
   return (
     <div className={cn("max-w-3xl mx-auto py-8", className)}>
       <article
@@ -32,86 +110,15 @@ export function MarkdownReader({
         style={style}
       >
         <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          components={{
-            table({ children }) {
-              return (
-                <div className="my-6 overflow-x-auto rounded-lg border">
-                  <table className="m-0 w-full border-collapse text-sm">
-                    {children}
-                  </table>
-                </div>
-              );
-            },
-            th({ children, ...props }) {
-              return (
-                <th
-                  className="border-b bg-secondary px-3 py-2 text-left font-semibold"
-                  {...props}
-                >
-                  {children}
-                </th>
-              );
-            },
-            td({ children, ...props }) {
-              return (
-                <td className="border-b px-3 py-2 align-top" {...props}>
-                  {children}
-                </td>
-              );
-            },
-            input({ className, ...props }) {
-              return (
-                <input
-                  className={cn("mr-2 align-middle accent-primary", className)}
-                  {...props}
-                  disabled
-                />
-              );
-            },
-            pre({ children }) {
-              return <>{children}</>;
-            },
-            code({
-              inline,
-              className,
-              children,
-              ...props
-            }: ComponentPropsWithoutRef<"code"> & { inline?: boolean }) {
-              const match = /language-(\w+)/.exec(className || "");
-              return !inline && match ? (
-                <CodeBlock language={match[1]} className={className} {...props}>
-                  {children}
-                </CodeBlock>
-              ) : (
-                <code
-                  className={cn(
-                    "bg-muted px-1.5 py-0.5 rounded text-sm font-mono text-primary",
-                    className,
-                  )}
-                  {...props}
-                >
-                  {children}
-                </code>
-              );
-            },
-            img({ src = "", alt = "" }) {
-              const resolvedSrc = resolveMarkdownImageSrc(
-                typeof src === "string" ? src : "",
-                bookId,
-                chapterFileName,
-              );
-
-              return <MarkdownImage src={resolvedSrc} alt={String(alt ?? "")} />;
-            },
-          }}
+          remarkPlugins={markdownRemarkPlugins}
+          components={components}
         >
           {content}
         </ReactMarkdown>
       </article>
     </div>
   );
-}
+});
 
 function MarkdownImage({ src, alt }: { src: string; alt: string }) {
   const { t } = useI18n();
@@ -135,6 +142,7 @@ function MarkdownImage({ src, alt }: { src: string; alt: string }) {
           height={540}
           sizes="(max-width: 768px) 100vw, 768px"
           unoptimized
+          referrerPolicy="no-referrer"
           onAuthenticatedError={() => setFailed(true)}
           onError={() => setFailed(true)}
           className="h-auto w-full object-contain"
