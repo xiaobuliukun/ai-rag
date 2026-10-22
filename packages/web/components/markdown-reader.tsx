@@ -142,6 +142,7 @@ function MarkdownImage({ src, alt }: { src: string; alt: string }) {
           height={540}
           sizes="(max-width: 768px) 100vw, 768px"
           unoptimized
+          referrerPolicy="no-referrer"
           onAuthenticatedError={() => setFailed(true)}
           onError={() => setFailed(true)}
           className="h-auto w-full object-contain"
